@@ -605,14 +605,21 @@ GW --> Client: 200 OK
 4. 不生成
 
 请选择 (1/2/3/4): 1
-
-输出格式:
-1. Mermaid (推荐，Markdown直接渲染)
-2. PlantUML
-3. DrawIO (.drawio文件)
-
-请选择 (1/2/3): 1
 ```
+
+选择后，询问DrawIO情况：
+
+```
+是否安装了DrawIO桌面应用? (y/n): n
+
+将生成Mermaid格式，可直接在Markdown中渲染
+```
+
+**判断逻辑**：
+- 有DrawIO → 可选择Mermaid/PlantUML/DrawIO
+- 无DrawIO → 自动使用Mermaid格式（无需额外工具）
+
+---
 
 ### 时序图生成步骤
 
@@ -639,6 +646,49 @@ GW --> Client: 200 OK
 ✅ 要这样：
     User->>Auth: 验证用户Token
 ```
+
+### Mermaid流程图输出
+
+当没有DrawIO时，流程图也用Mermaid格式：
+
+```mermaid
+flowchart TB
+    subgraph GW["API网关"]
+        direction LR
+        R1["/api/user/**"] --> S1["user-service"]
+        R2["/api/order/**"] --> S2["order-service"]
+        R3["/api/flow/**"] --> S3["flow-service"]
+    end
+
+    subgraph Services["微服务集群"]
+        S1 --> U1["用户管理"]
+        S2 --> O1["订单处理"]
+        S3 --> F1["流程引擎"]
+    end
+
+    subgraph Infra["基础设施"]
+        DB[(数据库)]
+        MQ{{消息队列}}
+        AUTH["认证服务"]
+    end
+
+    U1 --> AUTH
+    U1 --> DB
+    F1 --> MQ
+
+    style GW fill:#e3f2fd
+    style Services fill:#e8f5e9
+    style Infra fill:#fff3e0
+```
+
+**流程图节点类型**：
+- `[]` 矩形 - 服务/模块
+- `()` 圆角矩形 - 操作
+- `[()]` 圆柱 - 数据库
+- `{{}}` 菱形 - 判断
+- `{{}}` 六边形 - 消息队列
+
+---
 
 ```mermaid
 sequenceDiagram
