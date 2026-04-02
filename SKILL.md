@@ -604,7 +604,14 @@ GW --> Client: 200 OK
 3. 两者都生成
 4. 不生成
 
-请选择 (1/2/3/4):
+请选择 (1/2/3/4): 1
+
+输出格式:
+1. Mermaid (推荐，Markdown直接渲染)
+2. PlantUML
+3. DrawIO (.drawio文件)
+
+请选择 (1/2/3): 1
 ```
 
 ### 时序图生成步骤
@@ -617,23 +624,86 @@ GW --> Client: 200 OK
    - 每个API入口一个sequence
    - 按时间顺序记录每一步
 
-3. **生成Mermaid/PlantUML**
-   - 或调用drawio skill生成.drawio
+3. **输出Mermaid/PlantUML**
+   - 默认输出Mermaid格式
+   - Markdown可直接渲染
 
-### 时序图样式约定
+### Mermaid时序图输出
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant GW as edge-gateway
+    participant User as user-service
+    participant Auth as auth-service
+    participant DB as Database
+    participant MQ as Kafka
+
+    Note over Client,GW: 用户登录流程
+    Client->>GW: POST /api/user/login
+    GW->>User: 路由转发
+    User->>Auth: POST /api/verify
+    activate Auth
+    Auth->>DB: findByToken()
+    DB-->>Auth: token记录
+    deactivate Auth
+    Auth-->>User: 验证结果
+    User-->>GW: 登录结果
+    GW-->>Client: 200 OK
+
+    Note over Client,MQ: 流程执行流程
+    Client->>GW: POST /api/flow/execute
+    GW->>User: 路由转发
+    User->>Flow: HTTP调用
+    activate Flow
+    Flow->>MQ: publish flow-events
+    Flow-->>User: 执行结果
+    deactivate Flow
+    User-->>GW: 返回结果
+    GW-->>Client: 200 OK
 ```
-参与者类型:
-- actor: 用户/外部系统
-- participant: 服务
-- database: 数据库
-- queue: 消息队列
 
-箭头类型:
-- ->> : 同步调用
-- -->> : 返回
-- -)>> : 异步调用
-- --x : 失败/错误
+### PlantUML时序图输出
+
+```plantuml
+@startuml
+autonumber
+skinparam participantPadding 10
+skinparam boxPadding 10
+
+actor "Client" as Client
+participant "edge-gateway" as GW
+box "微服务" #LightBlue
+    participant "user-service" as User
+    participant "flow-service" as Flow
+end box
+participant "auth-service" as Auth
+database "Database" as DB
+queue "Kafka" as MQ
+
+== 用户登录流程 ==
+Client -> GW: POST /api/user/login
+GW -> User: 路由转发
+User -> Auth: POST /api/verify
+activate Auth
+Auth -> DB: findByToken()
+DB --> Auth: token记录
+deactivate Auth
+Auth --> User: 验证结果
+User --> GW: 登录结果
+GW --> Client: 200 OK
+
+== 流程执行流程 ==
+Client -> GW: POST /api/flow/execute
+GW -> Flow: 路由转发
+activate Flow
+Flow -> MQ: publish flow-events
+Flow --> GW: 执行结果
+deactivate Flow
+GW --> Client: 200 OK
+
+@enduml
 ```
 
 ---
