@@ -1,11 +1,11 @@
 ---
 name: flow-trace
-description: 分析Java微服务调用链，输出追踪路径，生成业务流程图。输入入口点，AI自动分析代码，识别HTTP/RPC/MQ/DB调用，输出JSON路径，调用drawio生成流程图。
+description: 分析Java微服务/网关调用链，输出追踪路径，生成业务流程图。输入入口点，AI自动分析代码或网关配置，识别HTTP/RPC/MQ/DB调用，输出JSON路径，调用drawio生成流程图。
 ---
 
 # Flow Trace Skill
 
-AI驱动的Java微服务调用链分析。
+AI驱动的微服务调用链分析，支持**业务服务**和**边缘网关**。
 
 ## 使用方式
 
@@ -15,11 +15,20 @@ AI驱动的Java微服务调用链分析。
 
 ### 入口点格式
 
+**业务服务**：
+
 | 格式 | 示例 |
 |------|------|
 | `服务名:类名.方法名` | `user-service:UserController.login` |
 | `服务名:/api路径` | `order-service:/api/orders/create` |
 | `服务名:类名` | `payment-service:PaymentService` |
+
+**网关服务**：
+
+| 格式 | 示例 |
+|------|------|
+| `网关名:gateway` | `api-gateway:gateway` |
+| `网关名:/api路径` | `api-gateway:/api/user/login` |
 
 ### 选项
 
@@ -27,12 +36,21 @@ AI驱动的Java微服务调用链分析。
 |------|------|
 | `--depth N` | 追踪深度，默认5 |
 | `--output FILE` | 输出文件名 |
+| `--gateway-type TYPE` | 网关类型：spring-cloud-gateway/kong/nginx/apisix |
 
 ### 示例
 
+**业务服务**：
 ```
 /flow-trace user-service:UserController.login
 /flow-trace order-service:/api/orders --depth 10
+```
+
+**网关服务**：
+```
+/flow-trace api-gateway:gateway
+/flow-trace api-gateway:/api/user/login
+/flow-trace gateway:gateway --gateway-type spring-cloud-gateway
 ```
 
 ---
@@ -60,6 +78,193 @@ AI驱动的Java微服务调用链分析。
 
 6. 生成流程图
    └── 调用drawio skill
+```
+
+---
+
+## 网关分析
+
+边缘网关是API入口，通过配置文件定义路由规则，不写业务代码。
+
+### 支持的网关类型
+
+| 网关 | 配置文件 | 识别方式 |
+|------|----------|----------|
+| Spring Cloud Gateway | `application.yml` / `RouteDefinition` | Java配置或YAML |
+| Kong | `kong.yml` / Admin API | YAML/JSON |
+| APISIX | `apisix.yaml` / Admin API | YAML |
+| Nginx | `nginx.conf` | 配置文件 |
+| Envoy | `envoy.yaml` | YAML |
+
+### 网关分析流程
+
+```
+1. 检测网关类型
+   └── 根据文件结构或参数判断
+
+2. 读取路由配置
+   ├── Spring Cloud Gateway → application.yml 或 RouteLocator
+   ├── Kong → kong.yml
+   ├── APISIX → apisix.yaml
+   └── Nginx → nginx.conf
+
+3. 解析路由规则
+   └── 提取：路径 → 下游服务
+
+4. 构建路由表
+   └── 记录所有API路由映射
+
+5. 追踪下游服务
+   └── 对每个下游服务继续分析
+```
+
+### Spring Cloud Gateway 配置分析
+
+**YAML配置**：
+
+```yaml
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: user-service-route
+          uri: lb://user-service
+          predicates:
+            - Path=/api/user/**
+          filters:
+            - StripPrefix=1
+
+        - id: order-service-route
+          uri: lb://order-service
+          predicates:
+            - Path=/api/order/**
+```
+
+**分析输出**：
+```
+路由规则:
+  /api/user/** → user-service
+  /api/order/** → order-service
+```
+
+**Java配置**：
+
+```java
+@Bean
+public RouteLocator customRouteLocator(RouteLocatorBuilder builder) {
+    return builder.routes()
+        .route("user-service", r -> r.path("/api/user/**")
+            .uri("lb://user-service"))
+        .route("order-service", r -> r.path("/api/order/**")
+            .uri("lb://order-service"))
+        .build();
+}
+```
+
+**识别要点**：
+- `uri: lb://service-name` → 负载均衡到服务
+- `uri: http://host:port` → 直接转发
+- `predicates: Path=/api/xxx` → 路径匹配规则
+- `filters` → 过滤器（可选）
+
+### Kong 配置分析
+
+```yaml
+_format_version: "3.0"
+
+services:
+  - name: user-service
+    url: http://user-service:8080
+    routes:
+      - name: user-route
+        paths:
+          - /api/user
+
+  - name: order-service
+    url: http://order-service:8080
+    routes:
+      - name: order-route
+        paths:
+          - /api/order
+```
+
+**识别要点**：
+- `services[].name` → 服务名
+- `services[].url` → 下游地址
+- `routes[].paths` → 路由路径
+
+### APISIX 配置分析
+
+```yaml
+routes:
+  - uri: /api/user/*
+    upstream:
+      service_name: user-service
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^/api/user/(.*)", "/$1"]
+
+  - uri: /api/order/*
+    upstream:
+      service_name: order-service
+```
+
+**识别要点**：
+- `uri` → 路由路径
+- `upstream.service_name` → 下游服务
+
+### Nginx 配置分析
+
+```nginx
+location /api/user/ {
+    proxy_pass http://user-service:8080/;
+}
+
+location /api/order/ {
+    proxy_pass http://order-service:8080/;
+}
+```
+
+**识别要点**：
+- `location` → 路由路径
+- `proxy_pass` → 下游地址
+
+### 网关输出格式
+
+```json
+{
+  "entry": {
+    "service": "api-gateway",
+    "type": "gateway",
+    "gateway_type": "spring-cloud-gateway"
+  },
+  "routes": [
+    {
+      "path": "/api/user/**",
+      "target_service": "user-service",
+      "target_url": "lb://user-service"
+    },
+    {
+      "path": "/api/order/**",
+      "target_service": "order-service",
+      "target_url": "lb://order-service"
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow-1",
+      "nodes": [
+        {"id": "gw-1", "type": "gateway", "name": "API Gateway"},
+        {"id": "gw-2", "type": "endpoint", "name": "/api/user/**"},
+        {"id": "gw-3", "type": "service", "name": "user-service"}
+      ],
+      "edges": [
+        {"from": "gw-1", "to": "gw-2", "label": "路由"},
+        {"from": "gw-2", "to": "gw-3", "label": "转发"}
+      ]
+    }
+  ]
+}
 ```
 
 ---
@@ -415,6 +620,88 @@ AI: 开始分析 user-service:UserController.login
 
 正在调用 drawio skill...
 已生成: login-flow.drawio
+```
+
+---
+
+## 网关使用示例
+
+```
+用户: /flow-trace api-gateway:gateway
+
+AI: 开始分析网关 api-gateway
+
+请输入 api-gateway 的代码路径: /projects/api-gateway
+
+检测到网关类型: Spring Cloud Gateway
+正在分析 application.yml...
+
+发现路由规则:
+┌──────────────────┬─────────────────┐
+│ 路径              │ 下游服务         │
+├──────────────────┼─────────────────┤
+│ /api/user/**     │ user-service    │
+│ /api/order/**    │ order-service   │
+│ /api/payment/**  │ payment-service │
+└──────────────────┴─────────────────┘
+
+是否追踪下游服务? (y/n): y
+
+请输入 user-service 的代码路径: /projects/user-service
+请输入 order-service 的代码路径: /projects/order-service
+请输入 payment-service 的代码路径: /projects/payment-service
+
+正在追踪 user-service...
+  POST /api/user/login
+    → UserController.login
+    → UserService.login
+    → HTTP: auth-service/api/verify
+
+发现外部服务: auth-service
+请输入 auth-service 的代码路径 (skip跳过): /projects/auth-service
+
+正在追踪 auth-service...
+  POST /api/verify
+    → AuthService.verify
+    → DB: authMapper.findByToken
+
+正在追踪 order-service...
+  POST /api/order/create
+    → OrderController.create
+    → OrderService.create
+    → MQ: order-events (Kafka)
+    → HTTP: inventory-service/api/check
+
+正在追踪 payment-service...
+  POST /api/payment/pay
+    → PaymentController.pay
+    → PaymentService.pay
+    → RPC: alipay-service (Dubbo)
+
+分析完成！
+
+追踪路径摘要:
+┌─────────────────┐
+│ API Gateway     │
+└────────┬────────┘
+         │
+    ┌────┴────┬──────────┐
+    ▼         ▼          ▼
+┌───────┐ ┌───────┐ ┌───────┐
+│ user  │ │ order │ │payment│
+└───┬───┘ └───┬───┘ └───┬───┘
+    │         │         │
+    ▼         ▼         ▼
+ auth     inventory  alipay
+ service  service    service
+    │
+    ▼
+ MyBatis
+
+是否生成流程图? (y/n): y
+
+正在调用 drawio skill...
+已生成: gateway-flow.drawio
 ```
 
 ---
