@@ -630,39 +630,87 @@ GW --> Client: 200 OK
 
 ### Mermaid时序图输出
 
+**重要：用业务描述替代技术细节**
+
+```
+❌ 不要这样：
+    User->>Auth: UserService.verifyToken()
+
+✅ 要这样：
+    User->>Auth: 验证用户Token
+```
+
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Client
-    participant GW as edge-gateway
-    participant User as user-service
-    participant Auth as auth-service
-    participant DB as Database
-    participant MQ as Kafka
+    actor 用户 as Client
+    participant 网关 as edge-gateway
+    participant 用户服务 as user-service
+    participant 认证服务 as auth-service
+    participant 数据库 as Database
+    participant 消息队列 as Kafka
 
-    Note over Client,GW: 用户登录流程
-    Client->>GW: POST /api/user/login
-    GW->>User: 路由转发
-    User->>Auth: POST /api/verify
-    activate Auth
-    Auth->>DB: findByToken()
-    DB-->>Auth: token记录
-    deactivate Auth
-    Auth-->>User: 验证结果
-    User-->>GW: 登录结果
-    GW-->>Client: 200 OK
+    Note over 用户,网关: 用户登录流程
+    用户->>网关: 发起登录请求
+    网关->>用户服务: 转发登录请求
+    用户服务->>认证服务: 验证用户身份
+    activate 认证服务
+    认证服务->>数据库: 查询用户信息
+    数据库-->>认证服务: 返回用户数据
+    deactivate 认证服务
+    认证服务-->>用户服务: 返回验证结果
+    用户服务-->>网关: 返回登录结果
+    网关-->>用户: 登录成功
 
-    Note over Client,MQ: 流程执行流程
-    Client->>GW: POST /api/flow/execute
-    GW->>User: 路由转发
-    User->>Flow: HTTP调用
-    activate Flow
-    Flow->>MQ: publish flow-events
-    Flow-->>User: 执行结果
-    deactivate Flow
-    User-->>GW: 返回结果
-    GW-->>Client: 200 OK
+    Note over 用户,消息队列: 流程执行
+    用户->>网关: 发起流程执行请求
+    网关->>用户服务: 转发执行请求
+    用户服务->>消息队列: 发布流程事件
+    用户服务-->>网关: 返回执行结果
+    网关-->>用户: 执行成功
 ```
+
+### 描述转换规则
+
+| 技术细节 | 业务描述 |
+|----------|----------|
+| `UserController.login` | 处理登录请求 |
+| `UserService.login` | 执行登录逻辑 |
+| `RestTemplate.post(url)` | 调用下游服务
+| `authMapper.findByToken` | 查询认证信息 |
+| `kafkaTemplate.send(topic)` | 发送消息到队列 |
+| `POST /api/user/login` | 登录接口 |
+| `GET /api/user/{id}` | 查询用户信息 |
+| `Dubbo invoke xxx` | 调用RPC服务 |
+
+### 描述生成原则
+
+1. **从方法名推断业务含义**
+   ```
+   login → 登录
+   createOrder → 创建订单
+   verifyToken → 验证Token
+   sendNotification → 发送通知
+   ```
+
+2. **从API路径推断**
+   ```
+   POST /api/user/login → 登录接口
+   GET /api/order/{id} → 查询订单
+   PUT /api/user/profile → 更新用户资料
+   ```
+
+3. **用业务语言而非技术语言**
+   ```
+   ❌ "调用AuthServiceImpl.verify方法"
+   ✅ "验证用户身份"
+
+   ❌ "执行SQL: SELECT * FROM users"
+   ✅ "查询用户数据"
+
+   ❌ "发送消息到Kafka topic flow-events"
+   ✅ "发布流程事件"
+   ```
 
 ### PlantUML时序图输出
 
@@ -672,36 +720,36 @@ autonumber
 skinparam participantPadding 10
 skinparam boxPadding 10
 
-actor "Client" as Client
-participant "edge-gateway" as GW
-box "微服务" #LightBlue
-    participant "user-service" as User
-    participant "flow-service" as Flow
+actor "用户" as 用户
+participant "API网关" as 网关
+box "业务服务" #LightBlue
+    participant "用户服务" as 用户服务
+    participant "流程服务" as 流程服务
 end box
-participant "auth-service" as Auth
-database "Database" as DB
-queue "Kafka" as MQ
+participant "认证服务" as 认证服务
+database "数据库" as 数据库
+queue "消息队列" as MQ
 
 == 用户登录流程 ==
-Client -> GW: POST /api/user/login
-GW -> User: 路由转发
-User -> Auth: POST /api/verify
-activate Auth
-Auth -> DB: findByToken()
-DB --> Auth: token记录
-deactivate Auth
-Auth --> User: 验证结果
-User --> GW: 登录结果
-GW --> Client: 200 OK
+用户 -> 网关: 发起登录请求
+网关 -> 用户服务: 转发登录请求
+用户服务 -> 认证服务: 验证用户身份
+activate 认证服务
+认证服务 -> 数据库: 查询用户信息
+数据库 --> 认证服务: 返回用户数据
+deactivate 认证服务
+认证服务 --> 用户服务: 返回验证结果
+用户服务 --> 网关: 返回登录结果
+网关 --> 用户: 登录成功
 
-== 流程执行流程 ==
-Client -> GW: POST /api/flow/execute
-GW -> Flow: 路由转发
-activate Flow
-Flow -> MQ: publish flow-events
-Flow --> GW: 执行结果
-deactivate Flow
-GW --> Client: 200 OK
+== 流程执行 ==
+用户 -> 网关: 发起流程执行请求
+网关 -> 流程服务: 转发执行请求
+activate 流程服务
+流程服务 -> MQ: 发布流程事件
+流程服务 --> 网关: 返回执行结果
+deactivate 流程服务
+网关 --> 用户: 执行成功
 
 @enduml
 ```
