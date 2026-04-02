@@ -369,6 +369,7 @@ rocketMQTemplate.send(topic, ...)
 // MyBatis
 xxxMapper.selectXxx()
 xxxMapper.insertXxx()
+xxxMapper.updateXxx()
 
 // JPA
 xxxRepository.findById()
@@ -382,6 +383,48 @@ jdbcTemplate.query(...)
 - 数据库类型：MyBatis/JPA/JDBC
 - 操作类型：SELECT/INSERT/UPDATE/DELETE
 - 表名（如有）
+
+### 表驱动异步流程识别
+
+**场景**：通过数据库表进行异步流程编排
+- 上个流程 → 写入表/更新状态
+- 下个流程 → 从表查询 → 继续处理
+- **没有直接的API调用，通过表解耦**
+
+**识别模式**：
+
+```java
+// 上游流程 - 写入/更新
+orderMapper.insert(order);
+orderMapper.updateStatus(orderId, "PENDING");
+
+// 下游流程 - 查询处理
+List<Order> orders = orderMapper.findByStatus("PENDING");
+for (Order order : orders) {
+    processOrder(order);
+    orderMapper.updateStatus(order.getId(), "PROCESSED");
+}
+```
+
+**分析要点**：
+1. 识别**状态字段**（如 `status`, `state`, `process_status`）
+2. 识别**状态流转**（PENDING → PROCESSING → PROCESSED）
+3. 找到**写入端**（上游流程）
+4. 找到**消费端**（下游流程）
+5. 识别**触发机制**（定时任务/事件监听/手动触发）
+
+**需要询问用户**：
+```
+发现表驱动流程:
+表名: process_task
+状态字段: status
+状态值: PENDING → PROCESSING → COMPLETED
+
+请确认:
+1. 上游流程是什么? (哪个服务/方法写入这个表)
+2. 下游流程是什么? (哪个服务/方法消费这个表)
+3. 触发机制是什么? (定时任务/事件/手动)
+```
 
 ---
 
@@ -761,6 +804,135 @@ sequenceDiagram
    ❌ "发送消息到Kafka topic flow-events"
    ✅ "发布流程事件"
    ```
+
+---
+
+## 表驱动异步流程
+
+### 场景描述
+
+```
+┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+│   上游流程   │ ──→  │   数据库表   │ ──→  │   下游流程   │
+│  (写入端)   │      │  (状态流转)  │      │  (消费端)   │
+└─────────────┘      └─────────────┘      └─────────────┘
+        │                  │                    │
+        │  INSERT/UPDATE   │   SELECT          │
+        │  status=PENDING  │   status=PENDING  │
+        └──────────────────┴────────────────────┘
+                    异步解耦
+```
+
+### 识别表驱动模式
+
+**代码模式**：
+```java
+// 上游写入
+taskMapper.insert(task);           // INSERT
+taskMapper.updateStatus(id, "PENDING"); // UPDATE
+
+// 下游消费
+List<Task> tasks = taskMapper.findByStatus("PENDING"); // SELECT
+for (Task task : tasks) {
+    process(task);
+    taskMapper.updateStatus(task.getId(), "COMPLETED");
+}
+
+// 定时任务触发
+@Scheduled(cron = "0 */5 * * * ?")
+public void processPendingTasks() { ... }
+```
+
+**识别信号**：
+- `status` / `state` / `process_status` 字段
+- `findByStatus` / `updateStatus` 方法
+- `@Scheduled` 定时任务
+- 状态机模式
+
+### 分析流程
+
+**询问用户**：
+```
+检测到表驱动异步流程:
+表名: process_task
+状态字段: status
+
+请确认:
+1. 上游流程是什么? (哪个服务写入表)
+2. 下游流程是什么? (哪个服务消费表)
+3. 触发机制? (定时任务/事件/手动)
+
+上游: flow-service:FlowExecutor.execute
+下游: task-service:TaskProcessor.process
+触发: 每5分钟定时任务
+```
+
+### 时序图输出
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor 用户
+    participant 上游 as flow-service
+    participant DB as process_task表
+    participant 定时 as Scheduler
+    participant 下游 as task-service
+
+    Note over 用户,上游: 阶段1: 任务创建
+    用户->>上游: 发起流程请求
+    上游->>DB: INSERT status='PENDING'
+    上游-->>用户: 返回任务ID
+
+    Note over 定时,下游: 阶段2: 异步处理
+    定时->>下游: 触发(每5分钟)
+    下游->>DB: SELECT status='PENDING'
+    DB-->>下游: 待处理任务
+    下游->>DB: UPDATE status='PROCESSING'
+    下游->>下游: 执行任务
+    下游->>DB: UPDATE status='COMPLETED'
+
+    Note over 用户,下游: 阶段3: 结果查询
+    用户->>上游: 查询状态
+    上游->>DB: SELECT BY id
+    DB-->>上游: status='COMPLETED'
+    上游-->>用户: 返回结果
+```
+
+### 流程图输出
+
+```mermaid
+flowchart LR
+    subgraph 上游["上游流程"]
+        A1["接收请求"] --> A2["创建任务"]
+        A2 --> A3["写入表<br/>PENDING"]
+    end
+
+    subgraph 表["数据库"]
+        T1[("process_task")]
+    end
+
+    subgraph 触发["触发"]
+        C1["定时任务<br/>每5分钟"]
+    end
+
+    subgraph 下游["下游流程"]
+        B1["查询PENDING"] --> B2["更新PROCESSING"]
+        B2 --> B3["执行逻辑"]
+        B3 --> B4["更新COMPLETED"]
+    end
+
+    A3 --> T1
+    T1 --> C1
+    C1 --> B1
+    B4 --> T1
+
+    style 上游 fill:#e3f2fd
+    style 表 fill:#f5f5f5
+    style 触发 fill:#fff3e0
+    style 下游 fill:#e8f5e9
+```
+
+---
 
 ### PlantUML时序图输出
 
