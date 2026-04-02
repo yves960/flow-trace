@@ -1,21 +1,11 @@
-# Flow Trace 配置文件 (可选)
-# 
-# 现在默认使用交互式模式，无需预配置。
-# 此文件仅用于保存常用服务路径，避免重复输入。
-#
-# 用法:
-#   python trace_flow.py --config config.yaml -e "service:Class.method"
-#
-# 或者直接运行，按提示输入:
-#   python trace_flow.py -e "service:Class.method"
+# Flow Trace 配置文件
 
+# 服务代码路径（可选，运行时会询问）
 repositories:
-  # 示例配置（运行时会自动保存新发现的服务）
   # user-service: /path/to/user-service
   # order-service: /path/to/order-service
-  # payment-service: /path/to/payment-service
 
+# 分析配置
 settings:
-  default_depth: 5
+  max_depth: 5
   source_pattern: "src/main/java/**/*.java"
-  resource_pattern: "src/main/resources/**/*.xml"
