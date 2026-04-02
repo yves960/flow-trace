@@ -465,9 +465,178 @@ jdbcTemplate.query(...)
 | `mq` | 消息队列 | 平行四边形 |
 | `database` | 数据库 | 圆柱 |
 
+### 时序图数据格式
+
+用于生成时序图的结构：
+
+```json
+{
+  "sequence": {
+    "participants": [
+      {"id": "client", "name": "Client", "type": "actor"},
+      {"id": "gw", "name": "edge-gateway", "type": "gateway"},
+      {"id": "user", "name": "user-service", "type": "service"},
+      {"id": "flow", "name": "flow-service", "type": "service"},
+      {"id": "auth", "name": "auth-service", "type": "service"},
+      {"id": "db", "name": "Database", "type": "database"},
+      {"id": "mq", "name": "Kafka", "type": "mq"}
+    ],
+    "sequences": [
+      {
+        "id": "seq-1",
+        "name": "用户登录流程",
+        "steps": [
+          {"from": "client", "to": "gw", "msg": "POST /api/user/login", "type": "sync"},
+          {"from": "gw", "to": "user", "msg": "路由转发", "type": "sync"},
+          {"from": "user", "to": "auth", "msg": "POST /api/verify", "type": "http"},
+          {"from": "auth", "to": "db", "msg": "findByToken()", "type": "db"},
+          {"from": "db", "to": "auth", "msg": "token记录", "type": "return"},
+          {"from": "auth", "to": "user", "msg": "验证结果", "type": "return"},
+          {"from": "user", "to": "gw", "msg": "登录结果", "type": "return"},
+          {"from": "gw", "to": "client", "msg": "200 OK", "type": "return"}
+        ]
+      },
+      {
+        "id": "seq-2", 
+        "name": "流程执行流程",
+        "steps": [
+          {"from": "client", "to": "gw", "msg": "POST /api/flow/execute", "type": "sync"},
+          {"from": "gw", "to": "flow", "msg": "路由转发", "type": "sync"},
+          {"from": "flow", "to": "mq", "msg": "publish flow-events", "type": "mq"},
+          {"from": "flow", "to": "gw", "msg": "执行结果", "type": "return"},
+          {"from": "gw", "to": "client", "msg": "200 OK", "type": "return"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+### 步骤类型
+
+| type | 说明 | 时序图箭头 |
+|------|------|-----------|
+| `sync` | 同步调用 | 实线箭头 |
+| `async` | 异步调用 | 虚线箭头 |
+| `http` | HTTP请求 | 虚线+标注 |
+| `rpc` | RPC调用 | 实线+标注 |
+| `mq` | 消息发送 | 虚线+标注 |
+| `db` | 数据库操作 | 实线+圆柱 |
+| `return` | 返回 | 虚线箭头 |
+
 ---
 
-## 执行步骤
+## 图表生成
+
+### 支持的图表类型
+
+| 类型 | 说明 | 适用场景 |
+|------|------|----------|
+| **时序图** | 展示调用顺序 | 分析单个API完整流程 |
+| **流程图** | 展示调用层级 | 分析整体架构关系 |
+| **依赖图** | 展示服务依赖 | 分析服务拓扑 |
+
+### 时序图生成
+
+追踪完成后，根据sequence数据生成时序图：
+
+**Mermaid格式**：
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as edge-gateway
+    participant User as user-service
+    participant Auth as auth-service
+    participant DB as Database
+    
+    Client->>GW: POST /api/user/login
+    GW->>User: 路由转发
+    User->>Auth: POST /api/verify (HTTP)
+    Auth->>DB: findByToken()
+    DB-->>Auth: token记录
+    Auth-->>User: 验证结果
+    User-->>GW: 登录结果
+    GW-->>Client: 200 OK
+```
+
+**PlantUML格式**：
+```plantuml
+@startuml
+actor Client
+participant "edge-gateway" as GW
+participant "user-service" as User
+participant "auth-service" as Auth
+database "Database" as DB
+
+Client -> GW: POST /api/user/login
+GW -> User: 路由转发
+User -> Auth: POST /api/verify (HTTP)
+Auth -> DB: findByToken()
+DB --> Auth: token记录
+Auth --> User: 验证结果
+User --> GW: 登录结果
+GW --> Client: 200 OK
+@enduml
+```
+
+### DrawIO时序图
+
+调用drawio skill生成.drawio文件：
+
+```
+时序图节点:
+- participant: 矩形，顶部排列
+- lifeline: 垂直虚线
+- message: 水平箭头
+- activation: 矩形条（可选）
+```
+
+---
+
+## Step 6: 生成图表
+
+分析完成后，询问用户需要生成哪种图表：
+
+```
+生成图表类型:
+1. 时序图 (sequence) - 展示调用顺序和交互 ← 推荐
+2. 流程图 (flowchart) - 展示调用层级关系
+3. 两者都生成
+4. 不生成
+
+请选择 (1/2/3/4):
+```
+
+### 时序图生成步骤
+
+1. **构建participants列表**
+   - 所有涉及的服务/系统/数据库/MQ
+   - 按调用顺序排列
+
+2. **构建sequences列表**
+   - 每个API入口一个sequence
+   - 按时间顺序记录每一步
+
+3. **生成Mermaid/PlantUML**
+   - 或调用drawio skill生成.drawio
+
+### 时序图样式约定
+
+```
+参与者类型:
+- actor: 用户/外部系统
+- participant: 服务
+- database: 数据库
+- queue: 消息队列
+
+箭头类型:
+- ->> : 同步调用
+- -->> : 返回
+- -)>> : 异步调用
+- --x : 失败/错误
+```
+
+---
 
 ### Step 1: 判断入口类型
 
@@ -757,10 +926,42 @@ AI: 开始分析网关 edge-gateway
     ▼
  MyBatis
 
-是否生成流程图? (y/n): y
+生成图表类型:
+1. 流程图 (flowchart) - 展示调用层级关系
+2. 时序图 (sequence) - 展示调用顺序和交互
+3. 两者都生成
 
-正在调用 drawio skill...
-已生成: edge-gateway-flow.drawio
+请选择 (1/2/3): 2
+
+正在生成时序图...
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as edge-gateway
+    participant User as user-service
+    participant Flow as flow-service
+    participant Auth as auth-service
+    participant DB as Database
+    participant MQ as Kafka
+
+    Client->>GW: POST /api/user/login
+    GW->>User: 路由转发
+    User->>Auth: HTTP POST /api/verify
+    Auth->>DB: findByToken()
+    DB-->>Auth: token记录
+    Auth-->>User: 验证结果
+    User-->>GW: 登录结果
+    GW-->>Client: 200 OK
+    
+    Client->>GW: POST /api/flow/execute
+    GW->>Flow: 路由转发
+    Flow->>MQ: publish flow-events
+    Flow-->>GW: 执行结果
+    GW-->>Client: 200 OK
+```
+
+已生成: edge-gateway-sequence.drawio
 ```
 
 ---
