@@ -1,18 +1,57 @@
 # 图表生成详细说明
 
-## 支持的图表类型
+## 图表类型选择
 
-| 类型 | 说明 | 适用场景 |
-|------|------|----------|
-| **时序图** | 展示调用顺序 | 分析单个API完整流程 |
-| **流程图** | 展示调用层级 | 分析整体架构关系 |
-| **依赖图** | 展示服务依赖 | 分析服务拓扑 |
+| 类型 | 说明 | 适用场景 | 推荐 |
+|------|------|----------|------|
+| **时序图** | 展示调用顺序 | 分析API完整流程 | **默认推荐** |
+| **流程图** | 展示调用层级 | 分析整体架构关系 | 可选 |
+| **依赖图** | 展示服务依赖 | 分析服务拓扑 | 可选 |
+
+**优先推荐时序图**，因为：
+- 更直观展示调用顺序
+- 适合分析单个或多个API的完整流程
+- 易于理解服务间的交互关系
+
+## 生成方式
+
+**默认用 Mermaid 生成**（无需额外工具，Markdown可直接渲染）：
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as edge-gateway
+    participant User as user-service
+    participant Auth as auth-service
+    participant DB as Database
+    
+    Client->>GW: POST /api/user/login
+    GW->>User: 路由转发
+    User->>Auth: HTTP POST /api/verify
+    Auth->>DB: findByToken()
+    DB-->>Auth: token记录
+    Auth-->>User: 验证结果
+    User-->>GW: 登录结果
+    GW-->>Client: 200 OK
+```
+
+**如果用户安装了 DrawIO 桌面应用**，可额外生成 .drawio 文件：
+
+```
+是否安装了 DrawIO 桌面应用? (y/n): y
+
+将同时生成:
+- Mermaid 格式（Markdown渲染）
+- .drawio 文件（DrawIO编辑）
+
+是否生成 .drawio 文件? (y/n):
+```
 
 ## 时序图生成
 
 追踪完成后，根据sequence数据生成时序图：
 
-**Mermaid格式**：
+**默认 Mermaid 格式**（推荐，Markdown可直接渲染）：
 ```mermaid
 sequenceDiagram
     participant Client
@@ -31,7 +70,7 @@ sequenceDiagram
     GW-->>Client: 200 OK
 ```
 
-**PlantUML格式**：
+**可选：PlantUML 格式**（需要 PlantUML 环境）：
 ```plantuml
 @startuml
 actor Client
@@ -50,9 +89,9 @@ GW --> Client: 200 OK
 @enduml
 ```
 
-## DrawIO时序图
+**可选：DrawIO .drawio 文件**（需要 DrawIO 桌面应用）：
 
-调用drawio skill生成.drawio文件：
+调用 drawio skill 生成 .drawio 文件：
 
 ```
 时序图节点:

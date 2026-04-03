@@ -148,6 +148,68 @@ flowchart TB
 
 ---
 
+## Step 6: 生成图表
+
+用户选择"结束探索，生成图表"后执行：
+
+### 图表类型选择
+
+```
+生成图表类型:
+1. 时序图 (sequence) ← 推荐，展示调用顺序和交互
+2. 流程图 (flowchart) - 展示调用层级关系
+3. 两者都生成
+
+请选择 (1/2/3): 
+```
+
+**默认推荐时序图**，因为：
+- 更直观展示调用顺序
+- 适合分析单个或多个API的完整流程
+- 易于理解服务间的交互关系
+
+### 生成方式
+
+**默认用 Mermaid 生成**（无需额外工具，Markdown可直接渲染）：
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as edge-gateway
+    participant User as user-service
+    participant Auth as auth-service
+    participant DB as Database
+    
+    Client->>GW: POST /api/user/login
+    GW->>User: 路由转发
+    User->>Auth: HTTP POST /api/verify
+    Auth->>DB: findByToken()
+    DB-->>Auth: token记录
+    Auth-->>User: 验证结果
+    User-->>GW: 登录结果
+    GW-->>Client: 200 OK
+```
+
+**如果用户安装了 DrawIO 桌面应用**，可询问是否生成 .drawio 文件：
+
+```
+是否安装了 DrawIO 桌面应用? (y/n): y
+
+将同时生成:
+- Mermaid 格式（Markdown渲染）
+- .drawio 文件（DrawIO编辑）
+
+是否生成 .drawio 文件? (y/n):
+```
+
+### 输出位置
+
+生成图表后输出到：
+- Mermaid：直接在对话中输出
+- .drawio 文件：保存到用户指定的目录或当前工作目录
+
+---
+
 ## 详细文档
 
 - [网关分析详细说明](references/gateway-analysis.md) - 网关类型、配置解析、路由规则
