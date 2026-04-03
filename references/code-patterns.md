@@ -86,7 +86,7 @@ jdbcTemplate.query(...)
 - 下游流程 → 从表查询 → 继续处理
 - **没有直接的API调用，通过表解耦**
 
-**【关键规则】**：发现 INSERT/UPDATE 写入表时，**必须**追踪 SELECT 读取端！
+**【关键规则】**：发现 INSERT/UPDATE 写入表时，**先自动搜索** SELECT 读取端，找不到时才询问用户！
 
 ### 写入时识别
 
@@ -96,56 +96,85 @@ orderMapper.insert(order);
 orderMapper.updateStatus(orderId, "PENDING");
 ```
 
-**发现写入时强制询问**：
-```
-发现数据写入:
-表名: order_task
-操作: INSERT status='PENDING'
-上下文: OrderService.createOrder → orderMapper.insert(order)
+### 自动搜索读取端
 
-════════════════════════════════════════════════════════
-【强制】该表的数据被谁读取？
-════════════════════════════════════════════════════════
-
-请确认:
-1. 读取这个表的服务是什么？
-2. 读取方法/触发机制是什么？
-
-请输入读取端服务名:
-请输入读取端代码路径:
-```
-
-### 读取端识别
+发现写入后，**自动搜索**：
 
 ```java
-// 追踪读取端
+// 搜索模式1: findByStatus 方法
 List<Order> orders = orderMapper.findByStatus("PENDING");
-for (Order order : orders) {
-    processOrder(order);
-    orderMapper.updateStatus(order.getId(), "PROCESSED");
+
+// 搜索模式2: @Scheduled 定时任务
+@Scheduled(cron = "0 */5 * * * ?")
+public void processPendingOrders() {
+    List<Order> orders = orderMapper.findByStatus("PENDING");
+    // ...
+}
+
+// 搜索模式3: 事件监听器
+@EventListener(OrderCreatedEvent.class)
+public void onOrderCreated(OrderCreatedEvent event) {
+    Order order = orderMapper.findById(event.getOrderId());
+    // ...
 }
 ```
 
-**分析要点**：
-1. 识别**状态字段**（如 `status`, `state`, `process_status`）
-2. 识别**状态流转**（PENDING → PROCESSING → PROCESSED）
-3. 找到**写入端**（上游流程）← 从这里开始追踪
-4. 找到**消费端**（下游流程）← **必须追踪到这里！**
-5. 识别**触发机制**（定时任务/事件监听/手动触发）
+### 搜索策略
+
+**按以下顺序搜索**：
+
+1. **同一服务内搜索**：
+   - 搜索 `findByStatus`、`selectByStatus`、`queryByStatus` 方法
+   - 搜索包含表名的 Mapper 方法
+   - 搜索 `@Scheduled` 注解的方法中查询该表
+
+2. **跨服务搜索**（如已配置多个服务目录）：
+   - 在所有已配置服务中搜索该表的 SELECT 操作
+
+3. **状态字段匹配**：
+   - 如果写入时设置 `status='PENDING'`，搜索 `findByStatus("PENDING")`
+
+### 搜索结果处理
+
+**找到唯一读取端**：
+```
+自动找到读取端:
+表名: order_task
+读取端: task-service:TaskProcessor.process
+触发机制: @Scheduled(cron="0 */5 * * * ?")
+
+是否确认追踪该读取端? (y/n):
+```
+
+**找到多个候选**：
+```
+找到多个读取端候选:
+1. task-service:TaskProcessor.process (定时任务)
+2. admin-service:OrderQuery.list (管理后台)
+
+请选择主要读取端 (输入序号):
+```
+
+**未找到读取端**：
+```
+未自动找到读取端，请手动输入:
+请输入读取端服务名:
+```
 
 ### 追踪顺序
 
 ```
-写入端 → 数据表 → 读取端 → 读取端的下游调用
+写入端 → 数据表 → 自动搜索读取端 → 读取端的下游调用
 
 示例:
 OrderService.createOrder (写入端)
-    │ INSERT order_task
+    │ INSERT order_task (自动发现)
     ▼
 order_task 表 (status字段)
+    │ 自动搜索 → 找到 TaskProcessor.process
     │ SELECT status='PENDING'
     ▼
-TaskProcessor.process (读取端)
+TaskProcessor.process (读取端，自动追踪)
     │ HTTP POST
     ▼
 NotificationService (下游服务)

@@ -79,9 +79,14 @@ flowchart TB
     AskPath -->|输入路径| Step3b
     AskPath -->|skip| Record[记录待追踪]
     
-    FoundCall -->|INSERT/UPDATE表| AskReader[【强制】询问读取端]
-    AskReader --> InputReader[输入读取端服务]
-    InputReader --> Step3c[追踪SELECT端]
+    FoundCall -->|INSERT/UPDATE表| AutoSearch[自动搜索读取端]
+    AutoSearch --> SearchResult{搜索结果?}
+    SearchResult -->|找到唯一| Confirm[确认追踪]
+    SearchResult -->|找到多个| SelectOne[选择读取端]
+    SearchResult -->|未找到| AskReader[询问用户]
+    Confirm --> Step3c[追踪SELECT端]
+    SelectOne --> Step3c
+    AskReader --> Step3c
     Step3c --> FoundCall
     
     FoundCall -->|无| Step4[Step 4: 记录结果]
@@ -102,7 +107,7 @@ flowchart TB
     Step6 --> End[结束]
 ```
 
-**关键路径**：INSERT/UPDATE 写入表 → 【强制】询问读取端 → 追踪 SELECT 端流程
+**关键路径**：INSERT/UPDATE 写入表 → 自动搜索读取端 → 确认/选择/询问 → 追踪 SELECT 端流程
 
 **关键点**：每次分析完成必须回到 Step 5 询问，直到用户选择"结束探索"才进入 Step 6 生成时序图。
 
@@ -112,15 +117,15 @@ flowchart TB
 
 ### 必须执行的询问点
 
-| 时机 | 询问内容 | 下一步 |
-|------|----------|--------|
-| 发现 INSERT/UPDATE 写入表 | **【强制】该表被谁读取？** | 输入读取端服务→Step3追踪SELECT端 |
-| 发现外部服务(HTTP/RPC) | 是否继续追踪？ | 已配置目录→直接使用；未配置→询问路径；skip→记录待追踪 |
-| 发现嵌套异步表 | 是否继续分析下游？ | 已配置目录→直接使用；未配置→询问路径；skip→记录待追踪 |
+| 时机 | 行为 | 下一步 |
+|------|------|--------|
+| 发现 INSERT/UPDATE 写入表 | **先自动搜索读取端** | 找到→确认追踪；多个→选择；未找到→询问用户 |
+| 发现外部服务(HTTP/RPC) | 询问是否继续追踪？ | 已配置目录→直接使用；未配置→询问路径；skip→记录待追踪 |
+| 发现嵌套异步表 | 询问是否继续分析下游？ | 已配置目录→直接使用；未配置→询问路径；skip→记录待追踪 |
 | 单个服务分析完成 | 是否继续探索？(Step5) | 继续→回Step1-3；配置目录→选项4；结束→Step6 |
 | 用户选择配置服务目录 | 输入服务名和路径 | 添加到配置→返回Step5 |
 
-**注意**：数据库写入追踪是强制的，不能 skip，必须找到读取端！
+**注意**：数据库写入追踪优先自动搜索，只有查不到时才询问用户！
 
 ### 探索询问格式(Step 5)
 
@@ -222,13 +227,13 @@ repositories:
 
 ---
 
-## 数据库写入追踪（强制）
+## 数据库写入追踪（自动搜索优先）
 
 **关键规则**：发现 INSERT/UPDATE 写入某个表时，**必须**继续追踪 SELECT 读取端！
 
-### 写入表时的询问
+### 自动搜索读取端
 
-当分析代码发现写入某个数据表（INSERT/UPDATE）：
+发现写入表时，**先自动搜索读取端**：
 
 ```
 发现数据写入:
@@ -236,51 +241,99 @@ repositories:
 操作: INSERT status='PENDING'
 上下文: OrderService.createOrder → orderMapper.insert(order)
 
+正在自动搜索读取端...
+
+搜索模式:
+1. 搜索 findByStatus / selectByStatus 方法
+2. 搜索 @Scheduled 定时任务中查询该表
+3. 搜索事件监听器处理该表
+```
+
+### 搜索结果处理
+
+**找到唯一读取端**：
+```
 ════════════════════════════════════════════════════════
-【强制】该表的数据被谁读取？
+自动找到读取端
 ════════════════════════════════════════════════════════
 
-写入表后必须追踪读取端，请确认:
+表名: order_task
+读取端: task-service:TaskProcessor.process
+触发机制: @Scheduled(cron="0 */5 * * * ?")
+查询方法: taskMapper.findByStatus("PENDING")
+
+是否确认追踪该读取端? (y/n):
+- y → 继续追踪
+- n → 输入其他读取端
+```
+
+**找到多个候选**：
+```
+════════════════════════════════════════════════════════
+找到多个读取端候选
+════════════════════════════════════════════════════════
+
+表名: order_task
+
+候选读取端:
+1. task-service:TaskProcessor.process (定时任务，每5分钟)
+2. order-service:OrderCleanup.clean (定时任务，每天凌晨)
+3. admin-service:OrderQuery.list (管理后台查询)
+
+请选择主要读取端 (输入序号1/2/3，或输入其他服务名):
+```
+
+**未找到读取端**：
+```
+════════════════════════════════════════════════════════
+未自动找到读取端，请手动输入
+════════════════════════════════════════════════════════
+
+表名: order_task
+
+请确认:
 1. 读取这个表的服务是什么？
-2. 读取方法/触发机制是什么？
+2. 触发机制是什么？
 
-请输入读取端服务名 (如 task-service):
-请输入读取端代码路径 (或使用已配置目录):
+请输入读取端服务名 (或输入 unknown 跳过):
 ```
 
-### 读取端追踪流程
+### 搜索策略
 
-```
-──────────────────────────────────────────────────────────
-追踪读取端: task-service → TaskProcessor.process
-──────────────────────────────────────────────────────────
-找到: SELECT order_task WHERE status='PENDING'
-  → 处理任务
-  → UPDATE status='COMPLETED'
-  → HTTP调用: notification-service/api/send
+**按以下顺序搜索**：
 
-【继续递归追踪发现的调用】...
-```
+1. **同一服务内搜索**：
+   - 搜索 `findByStatus`、`selectByStatus`、`queryByStatus` 方法
+   - 搜索包含表名的 Mapper 方法
+   - 搜索 `@Scheduled` 注解的方法中查询该表
+
+2. **跨服务搜索**（如已配置多个服务目录）：
+   - 在所有已配置服务中搜索该表的 SELECT 操作
+   - 搜索 MQ 消费者中可能触发查询的逻辑
+
+3. **状态字段匹配**：
+   - 如果写入时设置 `status='PENDING'`，搜索 `findByStatus("PENDING")` 或类似
 
 ### 典型场景示例
 
 ```
 写入端: OrderService.createOrder
     │
-    │ INSERT order_task
+    │ INSERT order_task (自动发现)
     ▼
 数据表: order_task (status字段)
     │
-    │ SELECT status='PENDING' ← 必须追踪这里！
+    │ 自动搜索 → 找到 TaskProcessor.process
+    │ SELECT status='PENDING'
     ▼
-读取端: TaskProcessor.process
+读取端: TaskProcessor.process (自动追踪)
     │
-    │ HTTP POST
+    │ HTTP POST (继续递归)
     ▼
 下游服务: notification-service
 ```
 
-**追踪顺序**：写入端 → 数据表 → 读取端 → 读取端的下游调用
+**追踪顺序**：写入端 → 数据表 → **自动搜索读取端** → 读取端的下游调用
 
 ---
 
