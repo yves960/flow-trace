@@ -72,17 +72,24 @@ flowchart TB
     Service --> Step3[Step 3: 递归追踪]
     Step3 --> Found{发现外部调用?}
     
-    Found -->|是| AskExternal[询问是否追踪]
-    AskExternal -->|输入路径| Step3
-    AskExternal -->|skip| Record[记录待追踪]
+    Found -->|是| CheckConfig{已配置目录?}
+    CheckConfig -->|是| UseConfig[使用配置路径]
+    CheckConfig -->|否| AskPath[询问路径]
+    UseConfig --> Step3
+    AskPath -->|输入路径| Step3
+    AskPath -->|skip| Record[记录待追踪]
     Record --> Step3
     
     Found -->|否| Step4[Step 4: 记录结果]
     Step4 --> Step5[Step 5: 探索询问]
     
     Step5 --> Choice{用户选择}
-    Choice -->|继续探索| Step1
-    Choice -->|结束探索| Step6[Step 6: Mermaid时序图]
+    Choice -->|1.新入口| Step1
+    Choice -->|2.深入节点| Service
+    Choice -->|3.追踪未分析| Step3
+    Choice -->|4.配置目录| Config[配置服务目录]
+    Config --> Step5
+    Choice -->|5.结束探索| Step6[Step 6: Mermaid时序图]
     
     Step6 --> End[结束]
 ```
@@ -97,9 +104,10 @@ flowchart TB
 
 | 时机 | 询问内容 | 下一步 |
 |------|----------|--------|
-| 发现外部服务(HTTP/RPC) | 是否继续追踪？ | 输入路径→Step3；skip→记录待追踪；quit→结束 |
-| 发现嵌套异步表 | 是否继续分析下游？ | 输入路径→Step3；skip→记录待追踪；quit→结束 |
-| 单个服务分析完成 | 是否继续探索？(Step5) | 继续→回Step1-3；结束→Step6 |
+| 发现外部服务(HTTP/RPC) | 是否继续追踪？ | 已配置目录→直接使用；未配置→询问路径；skip→记录待追踪 |
+| 发现嵌套异步表 | 是否继续分析下游？ | 已配置目录→直接使用；未配置→询问路径；skip→记录待追踪 |
+| 单个服务分析完成 | 是否继续探索？(Step5) | 继续→回Step1-3；配置目录→选项4；结束→Step6 |
+| 用户选择配置服务目录 | 输入服务名和路径 | 添加到配置→返回Step5 |
 
 ### 探索询问格式(Step 5)
 
@@ -114,14 +122,89 @@ flowchart TB
 本次发现但未追踪的服务:
 • zzz-service (用户选择skip)
 
+当前已配置的服务目录:
+• user-service: /projects/user-service
+• auth-service: /projects/auth-service
+
 探索选项:
 1. 分析其他入口点
 2. 深入分析某个节点
 3. 追踪未分析的下游服务
-4. 结束探索，生成图表
-5. 仅输出JSON，不生成图表
+4. 配置/更新服务目录
+5. 结束探索，生成图表
+6. 仅输出JSON，不生成图表
 
-请选择 (1/2/3/4/5):
+请选择 (1/2/3/4/5/6):
+```
+
+### 选项4：配置服务目录
+
+用户选择选项4时：
+
+```
+════════════════════════════════════════════════════════
+配置服务目录
+════════════════════════════════════════════════════════
+
+当前已配置的服务目录:
+• user-service: /projects/user-service
+• auth-service: /projects/auth-service
+
+未配置的服务:
+• notification-service (发现但未追踪)
+• rule-engine (发现但未追踪)
+
+请输入服务名和目录 (格式: 服务名:目录路径，如 notification-service:/projects/notification-service)
+或输入 'done' 完成配置返回探索菜单:
+
+请输入: notification-service:/projects/notification-service
+
+已添加: notification-service → /projects/notification-service
+
+继续输入其他服务目录，或输入 'done' 完成: done
+
+返回探索询问菜单...
+```
+
+**服务目录的作用**：
+- 发现新服务时，如果已配置目录，直接使用配置路径，无需再次询问
+- 支持多服务在不同文件夹的场景
+- 配置可在探索过程中随时更新
+
+---
+
+## 服务目录配置
+
+### 方式一：探索过程中配置（推荐）
+
+在 Step 5 探索询问时选择选项4，随时添加/更新服务目录。
+
+### 方式二：预先配置文件
+
+```yaml
+# ~/.agents/skills/flow-trace/config.yaml
+repositories:
+  user-service: /projects/user-service
+  order-service: /projects/order-service
+  notification-service: /projects/notification-service
+  flow-service: /projects/flow-service
+```
+
+### 服务目录匹配规则
+
+发现外部服务时：
+1. 检查是否已配置该服务的目录
+2. 已配置 → 直接使用，显示确认信息
+3. 未配置 → 询问用户输入路径或skip
+
+```
+发现外部服务: notification-service
+
+已配置目录: /projects/notification-service
+是否使用该目录? (y/n/skip):
+- y → 继续追踪
+- n → 输入新路径
+- skip → 跳过该服务
 ```
 
 ---
