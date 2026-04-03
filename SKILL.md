@@ -432,6 +432,8 @@ for (Order order : orders) {
 
 ### 追踪路径JSON
 
+**标准同步调用**：
+
 ```json
 {
   "entry": {
@@ -492,6 +494,92 @@ for (Order order : orders) {
   "services": {
     "user-service": "/path/to/user-service",
     "auth-service": "/path/to/auth-service"
+  }
+}
+```
+
+**多层异步流程链**：
+
+```json
+{
+  "entry": {
+    "service": "flow-service",
+    "class": "FlowExecutor",
+    "method": "execute"
+  },
+  "async_chain": [
+    {
+      "layer": 1,
+      "type": "async_table",
+      "table": "process_task",
+      "status_field": "status",
+      "status_values": ["PENDING", "PROCESSING", "COMPLETED"],
+      "upstream": {
+        "service": "flow-service",
+        "method": "FlowExecutor.execute",
+        "action": "INSERT status='PENDING'"
+      },
+      "downstream": {
+        "service": "task-service",
+        "method": "TaskProcessor.process",
+        "trigger": "scheduled(cron='0 */5 * * * ?')",
+        "action": "SELECT status='PENDING'"
+      },
+      "external_calls": [
+        {
+          "type": "http",
+          "service": "notification-service",
+          "endpoint": "POST /api/notify",
+          "context": "RestTemplate → notification-service:8080",
+          "analyzed": true
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "type": "async_table",
+      "table": "notification_queue",
+      "status_field": "status",
+      "status_values": ["PENDING", "COMPLETED", "FAILED"],
+      "upstream": {
+        "service": "notification-service",
+        "method": "NotificationController.notify",
+        "action": "INSERT status='PENDING'"
+      },
+      "downstream": {
+        "service": "notify-service",
+        "method": "NotificationSender.send",
+        "trigger": "event(notification_queue_insert)",
+        "action": "SELECT status='PENDING'"
+      },
+      "external_calls": []
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow-1",
+      "name": "任务创建流程",
+      "nodes": [...],
+      "edges": [...]
+    },
+    {
+      "id": "flow-2",
+      "name": "任务处理流程",
+      "nodes": [...],
+      "edges": [...]
+    },
+    {
+      "id": "flow-3",
+      "name": "通知发送流程",
+      "nodes": [...],
+      "edges": [...]
+    }
+  ],
+  "services": {
+    "flow-service": "/path/to/flow-service",
+    "task-service": "/path/to/task-service",
+    "notification-service": "/path/to/notification-service",
+    "notify-service": "/path/to/notify-service"
   }
 }
 ```
@@ -851,7 +939,8 @@ public void processPendingTasks() { ... }
 
 ### 分析流程
 
-**询问用户**：
+**Step 1: 识别表驱动模式并询问上下游**
+
 ```
 检测到表驱动异步流程:
 表名: process_task
@@ -867,7 +956,101 @@ public void processPendingTasks() { ... }
 触发: 每5分钟定时任务
 ```
 
+**Step 2: 分析下游流程，识别外部服务调用**
+
+分析下游流程代码，识别是否调用外部服务：
+- HTTP/RPC调用其他服务
+- 发送到MQ（需追踪消费者）
+- 写入另一个异步表（可能触发更下游的流程）
+
+**Step 3: 发现外部服务时递归询问**
+
+```
+分析下游流程 task-service:TaskProcessor.process 时发现:
+  → HTTP调用: notification-service/api/send
+  → 上下文: RestTemplate POST http://notification-service:8080/api/send
+
+════════════════════════════════════════════════════════
+发现外部服务: notification-service
+════════════════════════════════════════════════════════
+
+是否继续分析 notification-service?
+- 输入代码路径 → 继续追踪
+- skip → 跳过该服务，但记录在流程图中
+- quit → 结束追踪
+
+请输入 notification-service 的代码路径 (skip跳过/quit退出):
+```
+
+**Step 4: 支持多层异步表嵌套**
+
+如果下游流程又写入另一个异步表：
+
+```
+分析 task-service:TaskProcessor.process 时发现:
+  → 写入异步表: notification_queue
+  → 状态字段: status
+
+════════════════════════════════════════════════════════
+发现嵌套的表驱动流程:
+════════════════════════════════════════════════════════
+第一层: process_task (当前分析)
+  ↓
+第二层: notification_queue (新发现)
+
+是否继续分析 notification_queue 的下游流程?
+- 输入下游服务路径 → 继续追踪
+- skip → 跳过，只记录到当前流程
+- quit → 结束追踪
+
+请输入 notification_queue 消费服务的代码路径 (skip跳过/quit退出):
+```
+
+**Step 5: 构建完整的异步流程链**
+
+将所有发现的异步表和外部服务调用串联起来：
+
+```
+异步流程链:
+┌─────────────────┐
+│ flow-service    │
+│ FlowExecutor    │
+└────────┬────────┘
+         │ INSERT
+         ▼
+┌─────────────────┐
+│ process_task    │ ← 异步表1
+│ status=PENDING  │
+└────────┬────────┘
+         │ SELECT (定时任务每5分钟)
+         ▼
+┌─────────────────┐
+│ task-service    │
+│ TaskProcessor   │
+└────────┬────────┘
+         │ HTTP POST
+         ▼
+┌─────────────────┐
+│ notification-   │ ← 外部服务
+│ service         │
+└────────┬────────┘
+         │ INSERT
+         ▼
+┌─────────────────┐
+│ notification_   │ ← 异步表2 (嵌套)
+│ queue           │
+└────────┬────────┘
+         │ SELECT (事件触发)
+         ▼
+┌─────────────────┐
+│ notify-service  │
+│ NotificationSend│
+└─────────────────┘
+```
+
 ### 时序图输出
+
+**单层异步表**：
 
 ```mermaid
 sequenceDiagram
@@ -898,7 +1081,58 @@ sequenceDiagram
     上游-->>用户: 返回结果
 ```
 
+**多层异步表 + 外部服务调用**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor 用户
+    participant 上游 as flow-service
+    participant DB1 as process_task表
+    participant 定时1 as Scheduler
+    participant 中游 as task-service
+    participant 外部 as notification-service
+    participant DB2 as notification_queue表
+    participant 定时2 as EventListener
+    participant 下游 as notify-service
+
+    Note over 用户,上游: 阶段1: 创建处理任务
+    用户->>上游: 发起流程请求
+    上游->>DB1: INSERT status='PENDING'
+    上游-->>用户: 返回任务ID
+
+    Note over 定时1,中游: 阶段2: 异步处理任务
+    定时1->>中游: 触发(每5分钟)
+    中游->>DB1: SELECT status='PENDING'
+    DB1-->>中游: 待处理任务
+    中游->>DB1: UPDATE status='PROCESSING'
+    
+    Note over 中游,外部: 发现外部服务调用
+    中游->>外部: HTTP POST /api/notify
+    activate 外部
+    外部->>DB2: INSERT status='PENDING'
+    外部-->>中游: 返回成功
+    deactivate 外部
+    
+    中游->>DB1: UPDATE status='COMPLETED'
+
+    Note over 定时2,下游: 阶段3: 嵌套异步流程
+    定时2->>下游: 事件触发
+    下游->>DB2: SELECT status='PENDING'
+    DB2-->>下游: 待发送通知
+    下游->>下游: 发送通知
+    下游->>DB2: UPDATE status='COMPLETED'
+
+    Note over 用户,下游: 阶段4: 结果查询
+    用户->>上游: 查询状态
+    上游->>DB1: SELECT BY id
+    DB1-->>上游: status='COMPLETED'
+    上游-->>用户: 返回结果
+```
+
 ### 流程图输出
+
+**单层异步表**：
 
 ```mermaid
 flowchart LR
@@ -930,6 +1164,59 @@ flowchart LR
     style 表 fill:#f5f5f5
     style 触发 fill:#fff3e0
     style 下游 fill:#e8f5e9
+```
+
+**多层异步表 + 外部服务调用**：
+
+```mermaid
+flowchart TB
+    subgraph Layer1["第一层: 任务处理"]
+        subgraph 上游["flow-service"]
+            A1["接收请求"] --> A2["创建任务"]
+        end
+        
+        T1[("process_task<br/>status")]
+        
+        subgraph 触发1["触发机制"]
+            C1["定时任务<br/>每5分钟"]
+        end
+        
+        subgraph 中游["task-service"]
+            B1["查询PENDING"] --> B2["处理任务"]
+            B2 --> B3["调用外部服务"]
+        end
+    end
+
+    subgraph Layer2["第二层: 通知发送"]
+        subgraph 外部["notification-service"]
+            D1["接收请求"] --> D2["创建通知任务"]
+        end
+        
+        T2[("notification_queue<br/>status")]
+        
+        subgraph 触发2["触发机制"]
+            C2["事件监听"]
+        end
+        
+        subgraph 下游["notify-service"]
+            E1["查询PENDING"] --> E2["发送通知"]
+            E2 --> E3["更新COMPLETED"]
+        end
+    end
+
+    A2 --> T1
+    T1 --> C1
+    C1 --> B1
+    B3 -->|HTTP POST| D1
+    D2 --> T2
+    T2 --> C2
+    C2 --> E1
+
+    style Layer1 fill:#e3f2fd
+    style Layer2 fill:#e8f5e9
+    style T1 fill:#f5f5f5
+    style T2 fill:#f5f5f5
+    style 外部 fill:#fff3e0
 ```
 
 ---
@@ -1026,9 +1313,24 @@ deactivate 流程服务
 3. 定位处理方法
 4. 重复Step 2b
 
+对每个表驱动异步流程：
+1. 分析下游流程代码
+2. 识别下游流程中的外部服务调用
+3. 【关键】发现外部服务时询问是否继续分析：
+   
+   "下游流程 task-service:TaskProcessor.process 调用了外部服务 notification-service"
+   "是否继续追踪 notification-service? (输入路径/skip/quit)"
+   
+4. 识别下游流程是否写入另一个异步表
+5. 【关键】发现嵌套异步表时询问是否继续：
+   
+   "下游流程写入了新的异步表: notification_queue"
+   "是否继续分析 notification_queue 的消费流程? (输入路径/skip/quit)"
+
 控制：
 - 最大深度限制（默认5）
 - 已访问检查（避免循环）
+- 支持异步表嵌套追踪
 ```
 
 ### Step 4: 输出路径
@@ -1116,6 +1418,8 @@ repositories:
 ---
 
 ## 示例对话
+
+### 示例1：标准同步调用
 
 ```
 用户: /flow-trace user-service:UserController.login
@@ -1306,12 +1610,194 @@ sequenceDiagram
 
 ---
 
+### 示例3：多层异步流程 + 外部服务调用
+
+```
+用户: /flow-trace flow-service:FlowExecutor.execute
+
+AI: 开始分析 flow-service:FlowExecutor.execute
+
+请输入 flow-service 的代码路径: /projects/flow-service
+
+正在分析 FlowExecutor.java...
+找到: execute方法
+  → 写入异步表: process_task
+  → 状态字段: status
+
+════════════════════════════════════════════════════════
+检测到表驱动异步流程
+════════════════════════════════════════════════════════
+表名: process_task
+状态字段: status
+状态值: PENDING → PROCESSING → COMPLETED
+
+请确认:
+1. 下游流程是什么? (哪个服务消费表)
+2. 触发机制? (定时任务/事件/手动)
+
+请输入下游服务 task-service 的代码路径: /projects/task-service
+触发机制: 定时任务每5分钟
+
+──────────────────────────────────────────────────────────
+正在分析下游流程 task-service:TaskProcessor.process...
+──────────────────────────────────────────────────────────
+找到: TaskProcessor.process
+  → SELECT process_task WHERE status='PENDING'
+  → 处理任务逻辑
+  → HTTP调用: notification-service/api/send
+  → 上下文: RestTemplate POST http://notification-service:8080/api/send
+
+════════════════════════════════════════════════════════
+发现外部服务: notification-service
+════════════════════════════════════════════════════════
+
+是否继续分析 notification-service?
+请输入 notification-service 的代码路径 (skip跳过/quit退出): /projects/notification-service
+
+──────────────────────────────────────────────────────────
+正在分析 notification-service...
+──────────────────────────────────────────────────────────
+找到: NotificationController.notify
+  → NotificationService.createNotifyTask
+  → 写入异步表: notification_queue
+  → 状态字段: status
+
+════════════════════════════════════════════════════════
+发现嵌套的表驱动流程 (第二层)
+════════════════════════════════════════════════════════
+第一层: process_task (已分析)
+  ↓
+第二层: notification_queue (新发现)
+
+表名: notification_queue
+状态字段: status
+状态值: PENDING → COMPLETED → FAILED
+
+是否继续分析 notification_queue 的下游流程?
+请输入下游服务 notify-service 的代码路径 (skip跳过/quit退出): /projects/notify-service
+触发机制: 事件监听(notification_queue_insert)
+
+──────────────────────────────────────────────────────────
+正在分析下游流程 notify-service:NotificationSender.send...
+──────────────────────────────────────────────────────────
+找到: NotificationSender.send
+  → SELECT notification_queue WHERE status='PENDING'
+  → 发送通知
+  → UPDATE status='COMPLETED'
+
+════════════════════════════════════════════════════════
+分析完成！发现多层异步流程链
+════════════════════════════════════════════════════════
+
+异步流程链:
+┌─────────────────┐
+│ flow-service    │
+│ FlowExecutor    │
+└────────┬────────┘
+         │ INSERT
+         ▼
+┌─────────────────┐
+│ process_task    │ ← 异步表1
+│ status=PENDING  │
+└────────┬────────┘
+         │ SELECT (定时任务每5分钟)
+         ▼
+┌─────────────────┐
+│ task-service    │
+│ TaskProcessor   │
+└────────┬────────┘
+         │ HTTP POST
+         ▼
+┌─────────────────┐
+│ notification-   │ ← 外部服务
+│ service         │
+└────────┬────────┘
+         │ INSERT
+         ▼
+┌─────────────────┐
+│ notification_   │ ← 异步表2 (嵌套)
+│ queue           │
+└────────┬────────┘
+         │ SELECT (事件触发)
+         ▼
+┌─────────────────┐
+│ notify-service  │
+│ NotificationSend│
+└─────────────────┘
+
+追踪路径摘要:
+- 涉及服务: flow-service, task-service, notification-service, notify-service
+- 异步表: process_task, notification_queue
+- 外部服务调用: task-service → notification-service (HTTP)
+
+生成图表类型:
+1. 流程图 (flowchart) - 展示调用层级关系
+2. 时序图 (sequence) - 展示调用顺序和交互
+3. 两者都生成
+
+请选择 (1/2/3): 2
+
+正在生成时序图...
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor 用户
+    participant 上游 as flow-service
+    participant DB1 as process_task表
+    participant 定时1 as Scheduler
+    participant 中游 as task-service
+    participant 外部 as notification-service
+    participant DB2 as notification_queue表
+    participant 定时2 as EventListener
+    participant 下游 as notify-service
+
+    Note over 用户,上游: 阶段1: 创建处理任务
+    用户->>上游: 发起流程请求
+    上游->>DB1: INSERT status='PENDING'
+    上游-->>用户: 返回任务ID
+
+    Note over 定时1,中游: 阶段2: 异步处理任务
+    定时1->>中游: 触发(每5分钟)
+    中游->>DB1: SELECT status='PENDING'
+    DB1-->>中游: 待处理任务
+    中游->>DB1: UPDATE status='PROCESSING'
+    
+    Note over 中游,外部: 发现外部服务调用
+    中游->>外部: HTTP POST /api/notify
+    activate 外部
+    外部->>DB2: INSERT status='PENDING'
+    外部-->>中游: 返回成功
+    deactivate 外部
+    
+    中游->>DB1: UPDATE status='COMPLETED'
+
+    Note over 定时2,下游: 阶段3: 嵌套异步流程
+    定时2->>下游: 事件触发
+    下游->>DB2: SELECT status='PENDING'
+    DB2-->>下游: 待发送通知
+    下游->>下游: 发送通知
+    下游->>DB2: UPDATE status='COMPLETED'
+
+    Note over 用户,下游: 阶段4: 结果查询
+    用户->>上游: 查询状态
+    上游->>DB1: SELECT BY id
+    DB1-->>上游: status='COMPLETED'
+    上游-->>用户: 返回结果
+```
+
+已生成: async-flow-chain-sequence.drawio
+```
+
+---
+
 ## 注意事项
 
 1. **需要代码访问权限**：AI需要能读取服务的源代码
 2. **最大深度**：默认5层，避免无限递归
 3. **已访问检查**：避免循环调用导致的无限分析
-4. **不支持的调用**：
+4. **异步流程递归**：发现外部服务调用或嵌套异步表时，必须询问是否继续分析
+5. **不支持的调用**：
    - 反射调用
    - 动态代理
    - 运行时生成的代码
