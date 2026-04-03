@@ -82,18 +82,43 @@ jdbcTemplate.query(...)
 ## 表驱动异步流程识别
 
 **场景**：通过数据库表进行异步流程编排
-- 上个流程 → 写入表/更新状态
-- 下个流程 → 从表查询 → 继续处理
+- 上游流程 → 写入表/更新状态
+- 下游流程 → 从表查询 → 继续处理
 - **没有直接的API调用，通过表解耦**
 
-**识别模式**：
+**【关键规则】**：发现 INSERT/UPDATE 写入表时，**必须**追踪 SELECT 读取端！
+
+### 写入时识别
 
 ```java
-// 上游流程 - 写入/更新
+// 发现写入操作
 orderMapper.insert(order);
 orderMapper.updateStatus(orderId, "PENDING");
+```
 
-// 下游流程 - 查询处理
+**发现写入时强制询问**：
+```
+发现数据写入:
+表名: order_task
+操作: INSERT status='PENDING'
+上下文: OrderService.createOrder → orderMapper.insert(order)
+
+════════════════════════════════════════════════════════
+【强制】该表的数据被谁读取？
+════════════════════════════════════════════════════════
+
+请确认:
+1. 读取这个表的服务是什么？
+2. 读取方法/触发机制是什么？
+
+请输入读取端服务名:
+请输入读取端代码路径:
+```
+
+### 读取端识别
+
+```java
+// 追踪读取端
 List<Order> orders = orderMapper.findByStatus("PENDING");
 for (Order order : orders) {
     processOrder(order);
@@ -104,21 +129,26 @@ for (Order order : orders) {
 **分析要点**：
 1. 识别**状态字段**（如 `status`, `state`, `process_status`）
 2. 识别**状态流转**（PENDING → PROCESSING → PROCESSED）
-3. 找到**写入端**（上游流程）
-4. 找到**消费端**（下游流程）
+3. 找到**写入端**（上游流程）← 从这里开始追踪
+4. 找到**消费端**（下游流程）← **必须追踪到这里！**
 5. 识别**触发机制**（定时任务/事件监听/手动触发）
 
-**需要询问用户**：
-```
-发现表驱动流程:
-表名: process_task
-状态字段: status
-状态值: PENDING → PROCESSING → COMPLETED
+### 追踪顺序
 
-请确认:
-1. 上游流程是什么? (哪个服务/方法写入这个表)
-2. 下游流程是什么? (哪个服务/方法消费这个表)
-3. 触发机制是什么? (定时任务/事件/手动)
+```
+写入端 → 数据表 → 读取端 → 读取端的下游调用
+
+示例:
+OrderService.createOrder (写入端)
+    │ INSERT order_task
+    ▼
+order_task 表 (status字段)
+    │ SELECT status='PENDING'
+    ▼
+TaskProcessor.process (读取端)
+    │ HTTP POST
+    ▼
+NotificationService (下游服务)
 ```
 
 ## 表驱动异步流程分析流程
