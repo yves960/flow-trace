@@ -576,7 +576,10 @@ GW --> Client: 200 OK
 ### 命令
 
 ```bash
-# 分析开始前：查看已分析的服务
+# 查看配置的服务路径
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py config
+
+# 分析开始前：查看上下文（会显示配置的服务路径！）
 python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py context
 
 # 分析完成后：保存结果（必须执行！）
@@ -599,7 +602,8 @@ python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py clear
 
 | 时机 | 命令 |
 |------|------|
-| 开始分析新服务前 | `context` 查看已分析服务 |
+| 分析开始前 | `config` 或 `context` 查看配置的服务路径 |
+| 发现跨服务调用时 | 先检查 `config` 输出，看是否已配置路径 |
 | 单个服务分析完成后 | `save` 保存结果 |
 | 用户选择"结束探索"后 | `summary` 汇总所有服务 |
 
