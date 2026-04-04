@@ -6,24 +6,22 @@ flow-trace 流程记录脚本
 解决长对话中模型遗忘问题。
 
 用法:
-    python flow_trace_record.py save <service> <entry> <json_result>   # 保存服务分析结果
-    python flow_trace_record.py list                                    # 列出所有已分析服务
-    python flow_trace_record.py get <service>                           # 获取某个服务的结果
-    python flow_trace_record.py summary                                 # 汇总所有服务流程
-    python flow_trace_record.py clear                                   # 清空记录
-    python flow_trace_record.py context                                 # 输出关键上下文prompt
-    python flow_trace_record.py config                                  # 显示配置的服务路径
+    python flow_trace_record.py save <service> <entry> <json_result>           # 保存服务分析结果
+    python flow_trace_record.py save --file <service> <entry> <file_path>      # 从文件读取结果保存
+    python flow_trace_record.py list                                           # 列出所有已分析服务
+    python flow_trace_record.py get <service>                                  # 获取某个服务的结果
+    python flow_trace_record.py summary                                        # 汇总所有服务流程
+    python flow_trace_record.py clear                                          # 清空记录
+    python flow_trace_record.py context                                        # 输出关键上下文prompt
+    python flow_trace_record.py config                                         # 显示配置的服务路径
 """
 
 import json
+import os
 import re
 import sys
+import yaml
 from pathlib import Path
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
 from datetime import datetime
 
 # 记录存储路径
@@ -36,14 +34,6 @@ def load_config():
     """加载配置文件"""
     if not CONFIG_FILE.exists():
         return {}
-    
-    if yaml is None:
-        print("⚠️ yaml 未安装，尝试 JSON 格式")
-        try:
-            with open(CONFIG_FILE, encoding="utf-8") as f:
-                return json.load(f) or {}
-        except Exception:
-            return {}
     
     try:
         with open(CONFIG_FILE, encoding="utf-8") as f:
@@ -93,19 +83,23 @@ def ensure_dir():
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def validate_service_name(service: str) -> str:
+def validate_service_name(name: str) -> str:
     """验证服务名，防止路径遍历"""
-    safe = re.sub(r'[^a-zA-Z0-9_\-.]', '_', service)
-    if safe != service:
-        print(f"⚠️ 服务名已清理: {service} → {safe}")
-    if '..' in safe or '/' in safe or '\\' in safe:
-        raise ValueError(f"非法服务名: {service}")
-    return safe
+    if not name or not re.match(r'^[a-zA-Z0-9_\-.]+$', name):
+        raise ValueError(f"无效的服务名: {name!r} (仅允许字母、数字、_-.)")
+    if '..' in name or '/' in name or '\\' in name:
+        raise ValueError(f"服务名包含非法字符: {name!r}")
+    return name
 
 
 def save_record(service: str, entry: str, result_raw: str):
     """保存服务分析结果（直接保存原始输出）"""
-    service = validate_service_name(service)
+    try:
+        validate_service_name(service)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return
+    
     ensure_dir()
     
     record = {
@@ -206,8 +200,12 @@ def get_record(service: str):
         print(f"❌ 服务 [{service}] 的记录不存在")
         return
     
-    with open(record_file, encoding="utf-8") as f:
-        record = json.load(f)
+    try:
+        with open(record_file, encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"❌ 读取失败: {e}")
+        return
     
     print(f"\n📋 服务 [{service}] 分析结果:")
     print("=" * 60)
@@ -256,46 +254,67 @@ def summary():
 
 
 def extract_downstream(result_raw) -> list:
-    """从分析结果原始文本中提取下游服务列表"""
+    """从原始分析文本中提取下游服务列表"""
     downstream = set()
     
-    # 如果是 dict（兼容旧格式），先转为文本
-    text = json.dumps(result_raw, ensure_ascii=False) if isinstance(result_raw, (dict, list)) else str(result_raw)
+    text = result_raw if isinstance(result_raw, str) else ""
+    if not text:
+        # 兼容旧格式：如果是 dict，尝试旧的递归提取
+        if isinstance(result_raw, dict):
+            return _extract_downstream_from_dict(result_raw)
+        return sorted(downstream)
     
-    # 从文本中用正则提取服务名（匹配常见的 service 调用模式）
-    patterns = [
-        r'(?:calls?|invoke|request|sendto)[\s:"\'`]([\w-]+(?:-service|Service|SERVICE)[\w-]*)',
-        r'"(?:target_service|service|downstream|called_service|dest|to)"\s*:\s*"([\w-]+)"',
-        r'(?:FeignClient|RestTemplate|HttpClient|WebClient|RabbitTemplate|KafkaTemplate).*?([\w-]+(?:service|Service))',
-    ]
-    for pat in patterns:
-        for m in re.finditer(pat, text, re.IGNORECASE):
-            downstream.add(m.group(1))
+    # 匹配 "下游服务:" 或 "downstream:" 后面的服务名列表
+    m = re.search(r'(?:下游服务|downstream)[：:]\s*(.+)', text, re.IGNORECASE)
+    if m:
+        names = re.split(r'[,，、\s]+', m.group(1).strip())
+        downstream.update(n.strip() for n in names if n.strip())
     
-    # 如果是 dict 格式，也用旧逻辑提取
-    if isinstance(result_raw, dict):
-        def _extract(obj):
-            if isinstance(obj, dict):
-                for key in ("service", "target_service", "downstream"):
-                    if key in obj:
-                        val = obj[key]
-                        if isinstance(val, list):
-                            downstream.update(val)
-                        elif isinstance(val, str):
-                            downstream.add(val)
-                for v in obj.values():
-                    _extract(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    _extract(item)
-        _extract(result_raw)
+    # 匹配 "→ 服务名" 模式
+    arrows = re.findall(r'→\s*([a-zA-Z0-9_\-.]+)', text)
+    downstream.update(arrows)
+    
+    # 匹配 "调用 xxx-service" / "请求 xxx-service" 模式
+    calls = re.findall(r'(?:调用|请求|调用服务|请求服务|call|invoke)\s+([a-zA-Z0-9_\-.]+(?:-service)?)', text, re.IGNORECASE)
+    downstream.update(calls)
     
     return sorted(downstream)
 
 
-def extract_calls(result: dict) -> list:
+def _extract_downstream_from_dict(obj: dict) -> list:
+    """旧格式兼容：从 dict 结构中递归提取下游服务"""
+    downstream = set()
+    
+    def _extract(o):
+        if isinstance(o, dict):
+            for key in ("service", "target_service", "downstream"):
+                if key in o:
+                    v = o[key]
+                    if isinstance(v, list):
+                        downstream.update(v)
+                    elif isinstance(v, str):
+                        downstream.add(v)
+            for v in o.values():
+                _extract(v)
+        elif isinstance(o, list):
+            for item in o:
+                _extract(item)
+    
+    _extract(obj)
+    return sorted(downstream)
+
+
+def extract_calls(result_raw) -> list:
     """从分析结果中提取调用链"""
     calls = []
+    
+    # 如果是旧格式 dict，保持兼容
+    if isinstance(result_raw, dict):
+        obj = result_raw
+    elif isinstance(result_raw, str):
+        return calls  # 文本格式暂不提取结构化调用链
+    else:
+        return calls
     
     def _extract(obj, path=""):
         if isinstance(obj, dict):
@@ -318,7 +337,7 @@ def extract_calls(result: dict) -> list:
             for item in obj:
                 _extract(item)
     
-    _extract(result)
+    _extract(obj)
     return calls
 
 
@@ -331,10 +350,15 @@ def clear_records():
         print("📝 暂无记录需要清空")
         return
     
+    count = 0
     for record_file in records:
-        record_file.unlink()
+        try:
+            record_file.unlink()
+            count += 1
+        except OSError as e:
+            print(f"⚠️ 删除 {record_file.name} 失败: {e}")
     
-    print(f"✅ 已清空 {len(records)} 条记录")
+    print(f"✅ 已清空 {count} 条记录")
 
 
 def context_prompt():
@@ -457,11 +481,13 @@ def export_markdown(output_path: str = None):
         output_path = "./flow-trace-output.md"
     
     # 写入文件
-    output_file = Path(output_path)
-    output_file.write_text(md_content, encoding="utf-8")
-    
-    print(f"\n✅ 已导出到: {output_file.absolute()}")
-    print(f"   服务数: {len(all_raw_results)}")
+    try:
+        output_file = Path(output_path)
+        output_file.write_text(md_content, encoding="utf-8")
+        print(f"\n✅ 已导出到: {output_file.absolute()}")
+        print(f"   服务数: {len(all_raw_results)}")
+    except OSError as e:
+        print(f"❌ 导出失败: {e}")
 
 
 def generate_mermaid_diagram(services: dict, calls: list) -> str:
@@ -553,21 +579,28 @@ def main():
     command = sys.argv[1]
     
     if command == "save":
-        if len(sys.argv) < 5:
-            print("用法: python flow_trace_record.py save <service> <entry> <result_or_file>")
-            print("       当 <result_or_file> 为 '-' 时从 stdin 读取")
-            print("       当以 '@' 开头时从文件读取 (如 @/tmp/result.txt)")
+        if len(sys.argv) < 3:
+            print("用法: python flow_trace_record.py save <service> <entry> <result>")
+            print("       python flow_trace_record.py save --file <service> <entry> <file_path>")
             return
-        content = sys.argv[4]
-        if content == '-':
-            content = sys.stdin.read()
-        elif content.startswith('@'):
+        if sys.argv[2] == "--file":
+            # 从文件读取结果，避免 shell 转义问题
+            if len(sys.argv) < 6:
+                print("用法: python flow_trace_record.py save --file <service> <entry> <file_path>")
+                return
+            svc, entry, file_path = sys.argv[3], sys.argv[4], sys.argv[5]
             try:
-                content = Path(content[1:]).read_text(encoding="utf-8")
+                with open(file_path, encoding="utf-8") as f:
+                    content = f.read()
             except OSError as e:
                 print(f"❌ 读取文件失败: {e}")
                 return
-        save_record(sys.argv[2], sys.argv[3], content)
+            save_record(svc, entry, content)
+        else:
+            if len(sys.argv) < 5:
+                print("用法: python flow_trace_record.py save <service> <entry> <result>")
+                return
+            save_record(sys.argv[2], sys.argv[3], sys.argv[4])
     
     elif command == "list":
         list_records()
@@ -575,6 +608,11 @@ def main():
     elif command == "get":
         if len(sys.argv) < 3:
             print("用法: python flow_trace_record.py get <service>")
+            return
+        try:
+            validate_service_name(sys.argv[2])
+        except ValueError as e:
+            print(f"❌ {e}")
             return
         get_record(sys.argv[2])
     
