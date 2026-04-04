@@ -16,9 +16,14 @@ flow-trace 流程记录脚本
 """
 
 import json
+import re
 import sys
-import yaml
 from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 from datetime import datetime
 
 # 记录存储路径
@@ -31,6 +36,14 @@ def load_config():
     """加载配置文件"""
     if not CONFIG_FILE.exists():
         return {}
+    
+    if yaml is None:
+        print("⚠️ yaml 未安装，尝试 JSON 格式")
+        try:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
+                return json.load(f) or {}
+        except Exception:
+            return {}
     
     try:
         with open(CONFIG_FILE, encoding="utf-8") as f:
@@ -80,8 +93,19 @@ def ensure_dir():
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def validate_service_name(service: str) -> str:
+    """验证服务名，防止路径遍历"""
+    safe = re.sub(r'[^a-zA-Z0-9_\-.]', '_', service)
+    if safe != service:
+        print(f"⚠️ 服务名已清理: {service} → {safe}")
+    if '..' in safe or '/' in safe or '\\' in safe:
+        raise ValueError(f"非法服务名: {service}")
+    return safe
+
+
 def save_record(service: str, entry: str, result_raw: str):
     """保存服务分析结果（直接保存原始输出）"""
+    service = validate_service_name(service)
     ensure_dir()
     
     record = {
@@ -92,8 +116,12 @@ def save_record(service: str, entry: str, result_raw: str):
     }
     
     record_file = RECORD_DIR / f"{service}.json"
-    with open(record_file, "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=2)
+    try:
+        with open(record_file, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(f"❌ 保存失败: {e}")
+        return
     
     print(f"✅ 已保存服务 [{service}] 的分析结果")
     print(f"   入口点: {entry}")
@@ -140,7 +168,7 @@ def list_records():
             service = record.get("service", record_file.stem)
             entry = record.get("entry", "未知")
             timestamp = record.get("timestamp", "")
-            downstream = extract_downstream(record.get("result", {}))
+            downstream = extract_downstream(record.get("result_raw", ""))
             services_info.append({
                 "service": service,
                 "entry": entry,
@@ -227,33 +255,41 @@ def summary():
     print("=" * 60)
 
 
-def extract_downstream(result: dict) -> list:
-    """从分析结果中提取下游服务列表"""
+def extract_downstream(result_raw) -> list:
+    """从分析结果原始文本中提取下游服务列表"""
     downstream = set()
     
-    def _extract(obj):
-        if isinstance(obj, dict):
-            # 检查常见的下游服务字段
-            if "service" in obj:
-                downstream.add(obj["service"])
-            if "target_service" in obj:
-                downstream.add(obj["target_service"])
-            if "downstream" in obj:
-                ds = obj["downstream"]
-                if isinstance(ds, list):
-                    downstream.update(ds)
-                elif isinstance(ds, str):
-                    downstream.add(ds)
-            if "calls" in obj:
-                _extract(obj["calls"])
-            # 递归
-            for v in obj.values():
-                _extract(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                _extract(item)
+    # 如果是 dict（兼容旧格式），先转为文本
+    text = json.dumps(result_raw, ensure_ascii=False) if isinstance(result_raw, (dict, list)) else str(result_raw)
     
-    _extract(result)
+    # 从文本中用正则提取服务名（匹配常见的 service 调用模式）
+    patterns = [
+        r'(?:calls?|invoke|request|sendto)[\s:"\'`]([\w-]+(?:-service|Service|SERVICE)[\w-]*)',
+        r'"(?:target_service|service|downstream|called_service|dest|to)"\s*:\s*"([\w-]+)"',
+        r'(?:FeignClient|RestTemplate|HttpClient|WebClient|RabbitTemplate|KafkaTemplate).*?([\w-]+(?:service|Service))',
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            downstream.add(m.group(1))
+    
+    # 如果是 dict 格式，也用旧逻辑提取
+    if isinstance(result_raw, dict):
+        def _extract(obj):
+            if isinstance(obj, dict):
+                for key in ("service", "target_service", "downstream"):
+                    if key in obj:
+                        val = obj[key]
+                        if isinstance(val, list):
+                            downstream.update(val)
+                        elif isinstance(val, str):
+                            downstream.add(val)
+                for v in obj.values():
+                    _extract(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _extract(item)
+        _extract(result_raw)
+    
     return sorted(downstream)
 
 
@@ -342,7 +378,7 @@ def context_prompt():
                     record = json.load(f)
                 service = record.get("service")
                 entry = record.get("entry")
-                downstream = extract_downstream(record.get("result", {}))
+                downstream = extract_downstream(record.get("result_raw", ""))
                 all_services.add(service)
                 all_downstream.update(downstream)
                 print(f"  • {service}: {entry}")
@@ -482,12 +518,12 @@ def preview_and_export():
             with open(record_file, encoding="utf-8") as f:
                 record = json.load(f)
             service = record.get("service")
-            result = record.get("result", {})
+            result_raw = record.get("result_raw", "")
             all_services[service] = {
                 "entry": record.get("entry"),
-                "downstream": extract_downstream(result)
+                "downstream": extract_downstream(result_raw)
             }
-            all_calls.extend(extract_calls(result))
+            all_calls.extend(extract_calls(result_raw))
         except:
             pass
     
@@ -518,9 +554,20 @@ def main():
     
     if command == "save":
         if len(sys.argv) < 5:
-            print("用法: python flow_trace_record.py save <service> <entry> <json_result>")
+            print("用法: python flow_trace_record.py save <service> <entry> <result_or_file>")
+            print("       当 <result_or_file> 为 '-' 时从 stdin 读取")
+            print("       当以 '@' 开头时从文件读取 (如 @/tmp/result.txt)")
             return
-        save_record(sys.argv[2], sys.argv[3], sys.argv[4])
+        content = sys.argv[4]
+        if content == '-':
+            content = sys.stdin.read()
+        elif content.startswith('@'):
+            try:
+                content = Path(content[1:]).read_text(encoding="utf-8")
+            except OSError as e:
+                print(f"❌ 读取文件失败: {e}")
+                return
+        save_record(sys.argv[2], sys.argv[3], content)
     
     elif command == "list":
         list_records()

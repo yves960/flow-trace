@@ -6,12 +6,14 @@ instructions: |
   
   **每个服务分析完成后，必须按以下顺序执行，缺一不可：**
   
-  ### 1. 保存分析结果（直接保存原始输出）
+  ### 1. 保存分析结果
   ```bash
-  python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<原始输出内容>'
-  ```
+  # 从文件读取（推荐）
+  python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> @/path/to/result.txt
   
-  直接把分析结果保存进去，不需要转JSON格式。
+  # 或从 stdin 读取
+  cat result.txt | python .../flow_trace_record.py save <服务名> <入口点> -
+  ```
   
   ### 2. 🛑 立即停止，展示询问菜单
   
@@ -86,25 +88,26 @@ Step 6: 用户选择「结束探索」→ preview → 用户确认 → export
 
 ### Step 4: 保存结果
 
-分析完一个服务后，直接把分析结果保存进去，不需要转JSON格式：
+分析完一个服务后，直接把分析结果保存进去：
 
 ```bash
-python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<分析结果原始内容>'
+# 方式1：直接传递（适合短内容）
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<内容>'
+
+# 方式2：从文件读取（适合长内容，推荐）
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> @/path/to/result.txt
+
+# 方式3：从 stdin 读取
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> -
 ```
 
 **示例**：
 ```bash
-python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save user-service UserController.login '
-## 分析结果
+# 从文件读取
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save user-service UserController.login @/tmp/analysis.txt
 
-入口点: UserController.login
-
-调用链:
-1. UserService.login() -> auth-service
-2. AuthClient.verify() -> HTTP POST /api/verify
-
-下游服务: auth-service
-'
+# 从 stdin 读取
+cat analysis.md | python .../flow_trace_record.py save user-service UserController.login -
 ```
 
 **Step 5 是强制步骤！** 分析完成后必须立即展示询问菜单，不能继续分析其他服务。
@@ -152,16 +155,19 @@ sequenceDiagram
 ### 核心命令
 
 ```bash
-# 开始前：清空旧记录（可选）
+# 开始前：清空旧记录
 python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py clear
 
 # 开始前：查看上下文
 python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py context
 
-# 分析后：保存结果（直接保存原始输出）
-python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<原始内容>'
+# 分析后：保存结果（从文件读取，推荐）
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> @/tmp/result.txt
 
-# 结束时：汇总所有服务（输出所有原始内容给模型）
+# 或从 stdin 读取
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> -
+
+# 结束时：汇总所有服务
 python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py summary
 
 # 预览并导出
