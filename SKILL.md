@@ -29,7 +29,13 @@ instructions: |
   请选择 (1/2/3/4/5/6/7):
   ```
   
-  **禁止**: 跳过询问、连续分析不保存、直接生成图表
+  ### 规则4: 输出前必须用户确认
+  用户选择"结束探索"后：
+  1. 先调用 `preview` 命令展示预览
+  2. 询问用户确认输出路径
+  3. 用户确认后才调用 `export` 命令写入文件
+  
+  **禁止**: 跳过询问、连续分析不保存、直接生成图表、未经确认输出文件
 ---
 
 # Flow Trace Skill
@@ -69,7 +75,41 @@ Step 2: 分析服务 → 识别调用
 Step 3: 递归追踪 → 发现跨服务调用
 Step 4: 保存结果 → save 命令
 Step 5: 探索询问 → 继续/结束
-Step 6: 生成图表 → summary 命令
+Step 6: 用户确认 → 输出到 Markdown 文件
+```
+
+### Step 6: 输出图表
+
+**用户选择"结束探索"后：**
+
+1. 先展示图表预览（Mermaid 代码）
+2. 询问用户确认：
+   ```
+   📊 图表已生成预览，是否输出到文件？
+   
+   输出路径（默认: ./flow-trace-output.md）:
+   或输入 'cancel' 取消:
+   ```
+3. 用户确认路径后，写入 Markdown 文件
+
+**输出文件格式：**
+```markdown
+# 跨微服务调用链分析
+
+## 服务列表
+- user-service
+- auth-service
+- ...
+
+## 调用关系图
+
+```mermaid
+sequenceDiagram
+    ...
+```
+
+## 详细调用链
+...
 ```
 
 ---
@@ -90,8 +130,11 @@ python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py context
 # 分析后：保存结果
 python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<JSON>'
 
-# 结束时：汇总所有服务
-python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py summary
+# 结束时：预览图表
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py preview
+
+# 用户确认后：导出到 Markdown
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py export [输出路径]
 ```
 
 ---

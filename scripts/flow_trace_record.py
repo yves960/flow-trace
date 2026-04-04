@@ -364,6 +364,163 @@ def context_prompt():
         print("\n📝 暂无已分析的服务")
 
 
+def export_markdown(output_path: str = None):
+    """导出调用链分析结果到 Markdown 文件"""
+    ensure_dir()
+    
+    records = list(RECORD_DIR.glob("*.json"))
+    if not records:
+        print("❌ 暂无已分析的服务记录，无法导出")
+        return
+    
+    # 收集所有服务数据
+    all_services = {}
+    all_calls = []
+    
+    for record_file in sorted(records):
+        try:
+            with open(record_file, encoding="utf-8") as f:
+                record = json.load(f)
+            service = record.get("service")
+            entry = record.get("entry")
+            result = record.get("result", {})
+            
+            all_services[service] = {
+                "entry": entry,
+                "downstream": extract_downstream(result),
+                "timestamp": record.get("timestamp"),
+                "result": result
+            }
+            
+            calls = extract_calls(result)
+            all_calls.extend(calls)
+        except Exception as e:
+            print(f"⚠️ 读取 {record_file.stem} 失败: {e}")
+    
+    # 生成 Mermaid 时序图
+    mermaid_content = generate_mermaid_diagram(all_services, all_calls)
+    
+    # 生成 Markdown 内容
+    md_content = f"""# 跨微服务调用链分析
+
+生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+## 📋 服务列表
+
+"""
+    for svc, info in all_services.items():
+        md_content += f"- **{svc}**: {info['entry']}\n"
+        if info.get('downstream'):
+            md_content += f"  - 下游服务: {', '.join(info['downstream'])}\n"
+    
+    md_content += f"""
+
+## 🔗 服务调用关系图
+
+```mermaid
+{mermaid_content}
+```
+
+## 📊 详细调用链
+
+"""
+    for i, call in enumerate(all_calls, 1):
+        md_content += f"{i}. **{call.get('from', '?')}** → **{call.get('to', '?')}** ({call.get('type', 'unknown')})\n"
+        if call.get('method'):
+            md_content += f"   - 方法: {call['method']}\n"
+    
+    # 确定输出路径
+    if not output_path:
+        output_path = "./flow-trace-output.md"
+    
+    # 写入文件
+    output_file = Path(output_path)
+    output_file.write_text(md_content, encoding="utf-8")
+    
+    print(f"\n✅ 已导出到: {output_file.absolute()}")
+
+
+def generate_mermaid_diagram(services: dict, calls: list) -> str:
+    """生成 Mermaid 时序图"""
+    lines = ["sequenceDiagram"]
+    
+    # 添加参与者
+    participants = set()
+    for call in calls:
+        if call.get('from'):
+            participants.add(call['from'])
+        if call.get('to'):
+            participants.add(call['to'])
+    
+    for p in sorted(participants):
+        lines.append(f"    participant {p}")
+    
+    # 添加调用关系
+    for call in calls:
+        from_svc = call.get('from', '?')
+        to_svc = call.get('to', '?')
+        call_type = call.get('type', 'call')
+        method = call.get('method', '')
+        
+        label = f"{call_type}"
+        if method:
+            label = f"{method}"
+        
+        lines.append(f"    {from_svc}->>{to_svc}: {label}")
+    
+    return "\n".join(lines)
+
+
+def preview_and_export():
+    """预览并导出（需要用户确认）"""
+    ensure_dir()
+    
+    records = list(RECORD_DIR.glob("*.json"))
+    if not records:
+        print("❌ 暂无已分析的服务记录")
+        return
+    
+    # 先展示预览
+    print("\n" + "=" * 60)
+    print("📊 图表预览")
+    print("=" * 60)
+    
+    # 收集数据
+    all_services = {}
+    all_calls = []
+    
+    for record_file in sorted(records):
+        try:
+            with open(record_file, encoding="utf-8") as f:
+                record = json.load(f)
+            service = record.get("service")
+            result = record.get("result", {})
+            all_services[service] = {
+                "entry": record.get("entry"),
+                "downstream": extract_downstream(result)
+            }
+            all_calls.extend(extract_calls(result))
+        except:
+            pass
+    
+    # 输出预览
+    print(f"\n已分析服务: {len(all_services)} 个")
+    print(f"调用链: {len(all_calls)} 条")
+    
+    # 输出 Mermaid 预览
+    mermaid = generate_mermaid_diagram(all_services, all_calls)
+    print("\n```mermaid")
+    print(mermaid)
+    print("```")
+    
+    # 询问用户确认
+    print("\n" + "=" * 60)
+    print("📊 图表已生成预览，是否输出到文件？")
+    print("=" * 60)
+    print("\n输出路径（默认: ./flow-trace-output.md）:")
+    print("或输入 'cancel' 取消:")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -397,6 +554,13 @@ def main():
     
     elif command == "config":
         show_config()
+    
+    elif command == "preview":
+        preview_and_export()
+    
+    elif command == "export":
+        output_path = sys.argv[2] if len(sys.argv) > 2 else None
+        export_markdown(output_path)
     
     else:
         print(f"未知命令: {command}")
