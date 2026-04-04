@@ -6,9 +6,22 @@ instructions: |
   
   **每个服务分析完成后，必须按以下顺序执行，缺一不可：**
   
-  1. 调用 save 保存结果
-  2. **立即停止，展示询问菜单**
-  3. 等待用户选择
+  ### 1. 保存分析结果
+  ```bash
+  python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<JSON>'
+  ```
+  
+  JSON 格式：
+  ```json
+  {
+    "service": "服务名",
+    "entry": "入口点",
+    "calls": [{"type": "HTTP", "target": "目标服务", "method": "方法"}],
+    "downstream": ["下游服务1", "下游服务2"]
+  }
+  ```
+  
+  ### 2. 🛑 立即停止，展示询问菜单
   
   **询问菜单（必须完整输出）：**
   ```
@@ -26,6 +39,8 @@ instructions: |
   
   请选择 (1/2/3/4/5/6/7):
   ```
+  
+  ### 3. 等待用户选择
   
   **🚫 绝对禁止：**
   - 分析完直接继续分析下一个服务
@@ -72,10 +87,46 @@ Step 0: 查看上下文 → context 命令
 Step 1: 解析入口点 → 定位服务目录
 Step 2: 分析服务 → 识别调用
 Step 3: 递归追踪 → 发现跨服务调用
-Step 4: 保存结果 → save 命令
+Step 4: 保存结果 → save 命令（见下方格式说明）
 Step 5: 🛑 立即停止，展示询问菜单 → 等待用户选择
 Step 6: 用户选择「结束探索」→ preview → 用户确认 → export
 ```
+
+### Step 4: 保存结果
+
+分析完一个服务后，必须调用 save 命令保存结果：
+
+```bash
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<JSON结果>'
+```
+
+**JSON 结果格式示例**：
+```json
+{
+  "service": "user-service",
+  "entry": "UserController.login",
+  "calls": [
+    {
+      "type": "HTTP",
+      "target": "auth-service",
+      "method": "POST /api/verify",
+      "file": "UserService.java:45"
+    },
+    {
+      "type": "DB",
+      "table": "users",
+      "operation": "SELECT"
+    }
+  ],
+  "downstream": ["auth-service", "order-service"]
+}
+```
+
+**字段说明**：
+- `service`: 当前分析的服务名
+- `entry`: 入口点（类名.方法名）
+- `calls`: 发现的调用列表，每项包含 type/target/method/file
+- `downstream`: 下游服务列表（跨服务调用的目标服务名）
 
 **Step 5 是强制步骤！** 分析完成后必须立即展示询问菜单，不能继续分析其他服务。
 
