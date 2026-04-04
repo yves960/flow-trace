@@ -323,27 +323,20 @@ def context_prompt():
     configured = get_configured_services()
     
     print("\n" + "=" * 60)
-    print("🔴 FLOW-TRACE 上下文提醒")
+    print("🔴 FLOW-TRACE 上下文")
     print("=" * 60)
     
-    # 🔴 首先显示配置的服务路径（强制提醒）
+    # 显示配置的服务路径
     if configured:
-        print("\n" + "=" * 60)
-        print("📁 已配置的服务路径（请使用这些路径！）")
-        print("=" * 60)
-        print("\n⚠️ 发现跨服务调用时，先检查下表是否已配置路径：\n")
+        print("\n📁 已配置的服务路径:")
         for service, path in configured.items():
             print(f"  • {service}: {path}")
-        print("\n💡 如果调用的服务已配置路径，直接使用，无需再询问用户！")
     else:
-        print("\n⚠️ 未在 config.yaml 中配置服务路径")
-        print(f"   配置文件: {CONFIG_FILE}")
+        print("\n⚠️ 未配置服务路径")
     
     # 显示已分析的服务
     if records:
-        print("\n" + "=" * 60)
-        print("📝 已分析的服务")
-        print("=" * 60)
+        print("\n📝 已分析的服务:")
         all_services = set()
         all_downstream = set()
         
@@ -356,52 +349,19 @@ def context_prompt():
                 downstream = extract_downstream(record.get("result", {}))
                 all_services.add(service)
                 all_downstream.update(downstream)
-                
-                # 检查是否已配置
-                has_config = "✅" if service in configured else "❌"
-                print(f"  {has_config} {service}: {entry}")
-                if downstream:
-                    print(f"      下游 → {', '.join(downstream)}")
+                print(f"  • {service}: {entry}")
             except:
                 pass
         
         # 找出未分析的服务
         unanalyzed = all_downstream - all_services
         if unanalyzed:
-            print(f"\n⚠️ 发现未分析的服务: {', '.join(sorted(unanalyzed))}")
-            # 检查这些服务是否已配置
+            print(f"\n⚠️ 未分析的服务: {', '.join(sorted(unanalyzed))}")
             unanalyzed_with_config = [s for s in unanalyzed if s in configured]
-            unanalyzed_without_config = [s for s in unanalyzed if s not in configured]
-            
             if unanalyzed_with_config:
-                print(f"   ✅ 已配置路径（可直接分析）: {', '.join(unanalyzed_with_config)}")
-            if unanalyzed_without_config:
-                print(f"   ❌ 未配置路径（需询问用户）: {', '.join(unanalyzed_without_config)}")
+                print(f"   ✅ 已配置路径: {', '.join(unanalyzed_with_config)}")
     else:
         print("\n📝 暂无已分析的服务")
-    
-    print("\n" + "=" * 60)
-    print("🔴 每次分析完成后必须执行:")
-    print("=" * 60)
-    print("""
-    python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<JSON结果>'
-    
-    然后展示探索询问菜单：
-    
-    ════════════════════════════════════════════════════════
-    📍 分析完成！请选择下一步操作：
-    ════════════════════════════════════════════════════════
-    
-    1. 分析其他入口点
-    2. 深入分析某个节点
-    3. 追踪未分析的下游服务
-    4. 配置/更新服务目录
-    5. 批量配置服务目录
-    6. 结束探索，生成图表
-    7. 仅输出JSON，不生成图表
-    
-    请选择 (1/2/3/4/5/6/7):
-""")
 
 
 def main():
