@@ -6,20 +6,12 @@ instructions: |
   
   **每个服务分析完成后，必须按以下顺序执行，缺一不可：**
   
-  ### 1. 保存分析结果
+  ### 1. 保存分析结果（直接保存原始输出）
   ```bash
-  python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<JSON>'
+  python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<原始输出内容>'
   ```
   
-  JSON 格式：
-  ```json
-  {
-    "service": "服务名",
-    "entry": "入口点",
-    "calls": [{"type": "HTTP", "target": "目标服务", "method": "方法"}],
-    "downstream": ["下游服务1", "下游服务2"]
-  }
-  ```
+  直接把分析结果保存进去，不需要转JSON格式。
   
   ### 2. 🛑 立即停止，展示询问菜单
   
@@ -47,7 +39,7 @@ instructions: |
   - 跳过询问菜单
   - 不等用户选择就继续
   
-  用户选择"结束探索"后，才执行 preview/export。
+  用户选择"结束探索"后，调用 summary 汇总所有结果，然后 preview/export。
 ---
 
 # Flow Trace Skill
@@ -94,39 +86,26 @@ Step 6: 用户选择「结束探索」→ preview → 用户确认 → export
 
 ### Step 4: 保存结果
 
-分析完一个服务后，必须调用 save 命令保存结果：
+分析完一个服务后，直接把分析结果保存进去，不需要转JSON格式：
 
 ```bash
-python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<JSON结果>'
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<分析结果原始内容>'
 ```
 
-**JSON 结果格式示例**：
-```json
-{
-  "service": "user-service",
-  "entry": "UserController.login",
-  "calls": [
-    {
-      "type": "HTTP",
-      "target": "auth-service",
-      "method": "POST /api/verify",
-      "file": "UserService.java:45"
-    },
-    {
-      "type": "DB",
-      "table": "users",
-      "operation": "SELECT"
-    }
-  ],
-  "downstream": ["auth-service", "order-service"]
-}
-```
+**示例**：
+```bash
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save user-service UserController.login '
+## 分析结果
 
-**字段说明**：
-- `service`: 当前分析的服务名
-- `entry`: 入口点（类名.方法名）
-- `calls`: 发现的调用列表，每项包含 type/target/method/file
-- `downstream`: 下游服务列表（跨服务调用的目标服务名）
+入口点: UserController.login
+
+调用链:
+1. UserService.login() -> auth-service
+2. AuthClient.verify() -> HTTP POST /api/verify
+
+下游服务: auth-service
+'
+```
 
 **Step 5 是强制步骤！** 分析完成后必须立即展示询问菜单，不能继续分析其他服务。
 
@@ -173,19 +152,20 @@ sequenceDiagram
 ### 核心命令
 
 ```bash
-# 查看配置的服务路径
-python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py config
+# 开始前：清空旧记录（可选）
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py clear
 
-# 分析前：查看上下文
+# 开始前：查看上下文
 python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py context
 
-# 分析后：保存结果
-python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<JSON>'
+# 分析后：保存结果（直接保存原始输出）
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py save <服务名> <入口点> '<原始内容>'
 
-# 结束时：预览图表
+# 结束时：汇总所有服务（输出所有原始内容给模型）
+python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py summary
+
+# 预览并导出
 python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py preview
-
-# 用户确认后：导出到 Markdown
 python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py export [输出路径]
 ```
 

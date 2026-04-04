@@ -80,19 +80,14 @@ def ensure_dir():
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_record(service: str, entry: str, result_json: str):
-    """保存服务分析结果"""
+def save_record(service: str, entry: str, result_raw: str):
+    """保存服务分析结果（直接保存原始输出）"""
     ensure_dir()
-    
-    try:
-        result = json.loads(result_json) if result_json.startswith("{") or result_json.startswith("[") else {"raw": result_json}
-    except json.JSONDecodeError:
-        result = {"raw": result_json}
     
     record = {
         "service": service,
         "entry": entry,
-        "result": result,
+        "result_raw": result_raw,  # 直接保存原始输出
         "timestamp": datetime.now().isoformat()
     }
     
@@ -187,29 +182,28 @@ def get_record(service: str):
         record = json.load(f)
     
     print(f"\n📋 服务 [{service}] 分析结果:")
-    print("=" * 50)
+    print("=" * 60)
     print(f"入口点: {record.get('entry')}")
     print(f"时间: {record.get('timestamp')}")
-    print("\n分析结果:")
-    print(json.dumps(record.get("result"), ensure_ascii=False, indent=2))
+    print("\n分析结果（原始输出）:")
+    print("=" * 60)
+    print(record.get("result_raw", "无内容"))
 
 
 def summary():
-    """汇总所有服务的流程"""
+    """汇总所有服务的流程（直接输出所有原始内容给模型）"""
     ensure_dir()
     
     records = list(RECORD_DIR.glob("*.json"))
     if not records:
-        print("📝 暂无已分析的服务记录，无法汇总")
+        print("❌ 暂无已分析的服务记录，无法汇总")
         return
     
     print("\n" + "=" * 60)
     print("📊 跨微服务调用链汇总")
     print("=" * 60)
     
-    all_services = {}
-    all_calls = []
-    
+    # 输出所有服务的原始分析结果
     for record_file in sorted(records):
         try:
             with open(record_file, encoding="utf-8") as f:
@@ -217,48 +211,20 @@ def summary():
             
             service = record.get("service")
             entry = record.get("entry")
-            result = record.get("result", {})
+            result_raw = record.get("result_raw", "")
             
-            all_services[service] = {
-                "entry": entry,
-                "downstream": extract_downstream(result),
-                "timestamp": record.get("timestamp")
-            }
-            
-            # 提取调用链
-            calls = extract_calls(result)
-            all_calls.extend(calls)
-            
+            print(f"\n{'='*60}")
+            print(f"服务: {service}")
+            print(f"入口点: {entry}")
+            print(f"{'='*60}")
+            print(result_raw)
         except Exception as e:
-            print(f"⚠️ 读取 {record_file.stem} 失败: {e}")
+            print(f"\n⚠️ 读取 {record_file.stem} 失败: {e}")
     
-    # 输出服务列表
-    print(f"\n已分析服务 ({len(all_services)} 个):")
-    for svc, info in all_services.items():
-        downstream = info.get("downstream", [])
-        ds_str = f" → {', '.join(downstream)}" if downstream else ""
-        print(f"  {svc}: {info['entry']}{ds_str}")
-    
-    # 输出服务关系图（Mermaid）
-    print("\n🔗 服务调用关系图 (Mermaid):")
-    print("```mermaid")
-    print("flowchart LR")
-    for svc, info in all_services.items():
-        for ds in info.get("downstream", []):
-            print(f"    {svc} --> {ds}")
-    print("```")
-    
-    # 输出完整时序图数据
-    print("\n📋 完整调用链 JSON:")
-    summary_data = {
-        "services": all_services,
-        "total_calls": len(all_calls),
-        "calls": all_calls[:20]  # 只显示前20条，避免太长
-    }
-    if len(all_calls) > 20:
-        summary_data["_note"] = f"还有 {len(all_calls) - 20} 条调用未显示"
-    
-    print(json.dumps(summary_data, ensure_ascii=False, indent=2))
+    print("\n" + "=" * 60)
+    print("以上是所有已分析服务的原始结果")
+    print("请根据这些内容生成最终的调用链图表")
+    print("=" * 60)
 
 
 def extract_downstream(result: dict) -> list:
@@ -346,6 +312,16 @@ def context_prompt():
     print("🔴 FLOW-TRACE 上下文")
     print("=" * 60)
     
+    # 🛑 如果有旧记录，提醒清空
+    if records:
+        print(f"\n⚠️ 发现 {len(records)} 条上次的分析记录！")
+        print("   如果是新的一次分析，请先清空旧记录：")
+        print("   ```bash")
+        print("   python ~/.agents/skills/flow-trace/scripts/flow_trace_record.py clear")
+        print("   ```")
+        print("\n   如果是继续上次的分析，可以忽略此提醒。")
+        print("\n" + "-" * 60)
+    
     # 显示配置的服务路径
     if configured:
         print("\n📁 已配置的服务路径:")
@@ -394,60 +370,51 @@ def export_markdown(output_path: str = None):
         return
     
     # 收集所有服务数据
-    all_services = {}
-    all_calls = []
+    all_raw_results = []
     
     for record_file in sorted(records):
         try:
             with open(record_file, encoding="utf-8") as f:
                 record = json.load(f)
-            service = record.get("service")
-            entry = record.get("entry")
-            result = record.get("result", {})
-            
-            all_services[service] = {
-                "entry": entry,
-                "downstream": extract_downstream(result),
-                "timestamp": record.get("timestamp"),
-                "result": result
-            }
-            
-            calls = extract_calls(result)
-            all_calls.extend(calls)
+            all_raw_results.append({
+                "service": record.get("service"),
+                "entry": record.get("entry"),
+                "result_raw": record.get("result_raw", ""),
+                "timestamp": record.get("timestamp")
+            })
         except Exception as e:
             print(f"⚠️ 读取 {record_file.stem} 失败: {e}")
     
-    # 生成 Mermaid 时序图
-    mermaid_content = generate_mermaid_diagram(all_services, all_calls)
+    if not all_raw_results:
+        print("❌ 没有有效数据可导出")
+        return
     
     # 生成 Markdown 内容
     md_content = f"""# 跨微服务调用链分析
 
 生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-## 📋 服务列表
+## 📋 已分析服务
 
 """
-    for svc, info in all_services.items():
-        md_content += f"- **{svc}**: {info['entry']}\n"
-        if info.get('downstream'):
-            md_content += f"  - 下游服务: {', '.join(info['downstream'])}\n"
+    for r in all_raw_results:
+        md_content += f"- **{r['service']}**: {r['entry']}\n"
     
-    md_content += f"""
+    md_content += "\n---\n\n"
+    
+    # 输出每个服务的原始分析结果
+    for r in all_raw_results:
+        md_content += f"""## 服务: {r['service']}
 
-## 🔗 服务调用关系图
+**入口点**: {r['entry']}
 
-```mermaid
-{mermaid_content}
-```
+**分析时间**: {r['timestamp']}
 
-## 📊 详细调用链
+### 分析结果
 
-"""
-    for i, call in enumerate(all_calls, 1):
-        md_content += f"{i}. **{call.get('from', '?')}** → **{call.get('to', '?')}** ({call.get('type', 'unknown')})\n"
-        if call.get('method'):
-            md_content += f"   - 方法: {call['method']}\n"
+{r['result_raw']}
+
+---\n\n"""
     
     # 确定输出路径
     if not output_path:
@@ -458,6 +425,7 @@ def export_markdown(output_path: str = None):
     output_file.write_text(md_content, encoding="utf-8")
     
     print(f"\n✅ 已导出到: {output_file.absolute()}")
+    print(f"   服务数: {len(all_raw_results)}")
 
 
 def generate_mermaid_diagram(services: dict, calls: list) -> str:
