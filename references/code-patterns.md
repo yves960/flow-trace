@@ -58,6 +58,96 @@ rocketMQTemplate.send(topic, ...)
 - Topic/Queue名称
 - 生产者/消费者角色
 
+## 异步调用识别（⚠️ 新增）
+
+### @Async 注解
+```java
+@Async
+public void processAsync(Order order) {
+    // 异步执行
+}
+
+// 调用方
+orderService.processAsync(order); // 触发异步
+```
+
+**识别要点**：
+- 方法标注 `@Async`
+- 调用后立即返回，实际执行在异步线程
+- 需要追踪异步方法内部的调用
+
+### CompletableFuture
+```java
+CompletableFuture.supplyAsync(() -> {
+    return orderService.process(order);
+}).thenAccept(result -> {
+    notificationService.send(result);
+});
+```
+
+**识别要点**：
+- `supplyAsync`/`runAsync` 启动异步
+- `thenApply`/`thenAccept` 链式调用
+- 追踪 Lambda 内部的方法调用
+
+### ApplicationEventPublisher
+```java
+// 发布事件
+applicationEventPublisher.publishEvent(new OrderCreatedEvent(order));
+
+// 监听事件
+@EventListener
+public void onOrderCreated(OrderCreatedEvent event) {
+    // 处理
+}
+
+@TransactionalEventListener
+public void onOrderCommitted(OrderCreatedEvent event) {
+    // 事务提交后处理
+}
+```
+
+**识别要点**：
+- `publishEvent()` → 搜索 `@EventListener`/`@TransactionalEventListener`
+- 事件类名作为关联依据
+- 可能跨服务（通过 MQ 传输事件）
+
+### 线程池执行
+```java
+// 方式1: TaskExecutor
+@Autowired
+private TaskExecutor taskExecutor;
+taskExecutor.execute(() -> process(order));
+
+// 方式2: ThreadPoolExecutor
+threadPool.submit(() -> process(order));
+
+// 方式3: @Bean TaskExecutor
+@Bean
+public TaskExecutor asyncExecutor() { ... }
+```
+
+**识别要点**：
+- `execute()`/`submit()` 启动异步
+- 追踪 Runnable/Callable 内部的调用
+
+### 分布式事务补偿
+```java
+// TCC
+@Compensable
+public void try() { ... }
+public void confirm() { ... }
+public void cancel() { ... }
+
+// Seata
+@TwoPhaseBusinessAction
+public void prepare() { ... }
+```
+
+**识别要点**：
+- TCC 的 cancel 是异步补偿链路
+- Saga 的补偿步骤需要单独追踪
+
 ## 数据库调用识别
 
 ```java
