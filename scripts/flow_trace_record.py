@@ -12,15 +12,67 @@ flow-trace 流程记录脚本
     python flow_trace_record.py summary                                 # 汇总所有服务流程
     python flow_trace_record.py clear                                   # 清空记录
     python flow_trace_record.py context                                 # 输出关键上下文prompt
+    python flow_trace_record.py config                                  # 显示配置的服务路径
 """
 
 import json
 import sys
+import yaml
 from pathlib import Path
 from datetime import datetime
 
 # 记录存储路径
 RECORD_DIR = Path.home() / ".flow-trace-records"
+# 配置文件路径
+CONFIG_FILE = Path(__file__).parent.parent / "config.yaml"
+
+
+def load_config():
+    """加载配置文件"""
+    if not CONFIG_FILE.exists():
+        return {}
+    
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"⚠️ 配置文件读取失败: {e}")
+        return {}
+
+
+def get_configured_services():
+    """获取已配置的服务路径"""
+    config = load_config()
+    repositories = config.get("repositories") or {}
+    # 过滤掉空值和注释
+    return {k: v for k, v in repositories.items() if v and not str(v).startswith("#")}
+
+
+def show_config():
+    """显示配置的服务路径"""
+    services = get_configured_services()
+    
+    print("\n" + "=" * 60)
+    print("📁 已配置的服务路径")
+    print("=" * 60)
+    
+    if not services:
+        print("\n⚠️ 未在 config.yaml 中配置任何服务路径")
+        print(f"   配置文件: {CONFIG_FILE}")
+        print("\n   配置示例:")
+        print("   repositories:")
+        print("     user-service: /path/to/user-service")
+        print("     order-service: /path/to/order-service")
+    else:
+        print(f"\n已配置 {len(services)} 个服务:\n")
+        for service, path in services.items():
+            exists = "✅" if Path(path).exists() else "❌"
+            print(f"  {exists} {service}: {path}")
+        
+        # 检查路径是否存在
+        missing = [s for s, p in services.items() if not Path(p).exists()]
+        if missing:
+            print(f"\n⚠️ 以下服务路径不存在: {', '.join(missing)}")
 
 
 def ensure_dir():
@@ -268,13 +320,33 @@ def context_prompt():
     ensure_dir()
     
     records = list(RECORD_DIR.glob("*.json"))
+    configured = get_configured_services()
     
     print("\n" + "=" * 60)
     print("🔴 FLOW-TRACE 上下文提醒")
     print("=" * 60)
     
+    # 🔴 首先显示配置的服务路径（强制提醒）
+    if configured:
+        print("\n" + "=" * 60)
+        print("📁 已配置的服务路径（请使用这些路径！）")
+        print("=" * 60)
+        print("\n⚠️ 发现跨服务调用时，先检查下表是否已配置路径：\n")
+        for service, path in configured.items():
+            print(f"  • {service}: {path}")
+        print("\n💡 如果调用的服务已配置路径，直接使用，无需再询问用户！")
+    else:
+        print("\n⚠️ 未在 config.yaml 中配置服务路径")
+        print(f"   配置文件: {CONFIG_FILE}")
+    
+    # 显示已分析的服务
     if records:
-        print("\n📝 已分析的服务:")
+        print("\n" + "=" * 60)
+        print("📝 已分析的服务")
+        print("=" * 60)
+        all_services = set()
+        all_downstream = set()
+        
         for record_file in sorted(records):
             try:
                 with open(record_file, encoding="utf-8") as f:
@@ -282,28 +354,29 @@ def context_prompt():
                 service = record.get("service")
                 entry = record.get("entry")
                 downstream = extract_downstream(record.get("result", {}))
-                print(f"  • {service}: {entry}")
+                all_services.add(service)
+                all_downstream.update(downstream)
+                
+                # 检查是否已配置
+                has_config = "✅" if service in configured else "❌"
+                print(f"  {has_config} {service}: {entry}")
                 if downstream:
-                    print(f"    下游 → {', '.join(downstream)}")
+                    print(f"      下游 → {', '.join(downstream)}")
             except:
                 pass
         
         # 找出未分析的服务
-        all_services = set()
-        all_downstream = set()
-        for record_file in records:
-            try:
-                with open(record_file, encoding="utf-8") as f:
-                    record = json.load(f)
-                all_services.add(record.get("service"))
-                all_downstream.update(extract_downstream(record.get("result", {})))
-            except:
-                pass
-        
         unanalyzed = all_downstream - all_services
         if unanalyzed:
             print(f"\n⚠️ 发现未分析的服务: {', '.join(sorted(unanalyzed))}")
-            print("   建议继续分析这些服务")
+            # 检查这些服务是否已配置
+            unanalyzed_with_config = [s for s in unanalyzed if s in configured]
+            unanalyzed_without_config = [s for s in unanalyzed if s not in configured]
+            
+            if unanalyzed_with_config:
+                print(f"   ✅ 已配置路径（可直接分析）: {', '.join(unanalyzed_with_config)}")
+            if unanalyzed_without_config:
+                print(f"   ❌ 未配置路径（需询问用户）: {', '.join(unanalyzed_without_config)}")
     else:
         print("\n📝 暂无已分析的服务")
     
@@ -361,6 +434,9 @@ def main():
     
     elif command == "context":
         context_prompt()
+    
+    elif command == "config":
+        show_config()
     
     else:
         print(f"未知命令: {command}")
